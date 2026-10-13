@@ -170,3 +170,80 @@ export async function itemTypeSummary(itemTypeId: string) {
     bullets,
   };
 }
+
+// ---------------------------------------------------------------- Attributes & Values file (portal / BULK_PRODUCT_DATA_TEMPLATE)
+const META_KEYS = new Set(['external_id', 'parent_sku', 'relationship_type', 'action']);
+const UNITS = /^(inches|inch|in|pounds|pound|lb|lbs|ounces|ounce|oz|feet|foot|ft|centimeters|cm|millimeters|mm|grams|g|kilograms|kg|liters|milliliters|ml|fluid ounces|count|each)$/i;
+const cellStr = (v: any): string => String(v?.richText ? v.richText.map((x: any) => x.text).join('') : v?.text ?? v?.result ?? v ?? '').trim();
+const cleanName = (s: string) => s.replace(/\*+\s*$/, '').trim();
+
+/**
+ * Read Target's "Attributes And Values" / BULK_PRODUCT_DATA_TEMPLATE Excel for one item type:
+ * sheet 1 row 1 = attribute names, row 2 = keys (mapped_property / attribute id);
+ * the item type sheet: row 1 = names (* = required), row 2 = notes (max selections), row 3+ = allowed values / TEXT / unit.
+ */
+export async function importAttributeFile(buf: Buffer, opts: { itemTypeId?: string; itemTypeName?: string } = {}) {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buf as any);
+  const sheets = wb.worksheets;
+  const rowVals = (ws: ExcelJS.Worksheet, n: number) => { const out: string[] = []; ws.getRow(n).eachCell({ includeEmpty: true }, (c, i) => { out[i - 1] = cellStr(c.value); }); return Array.from(out, (x) => x ?? ''); };
+  // sheet with the keys row ("external_id" in row 2)
+  const keySheet = sheets.find((ws) => rowVals(ws, 2).includes('external_id') || rowVals(ws, 1).includes('external_id'));
+  if (!keySheet) throw Object.assign(new Error('This file has no row with the Target keys (external_id, brands.name, …). Use the "Attributes And Values" or "Bulk Product Data Template" Excel from the Target portal.'), { statusCode: 400 });
+  const keyRowNo = rowVals(keySheet, 2).includes('external_id') ? 2 : 1;
+  const names = keyRowNo === 2 ? rowVals(keySheet, 1) : [];
+  const keys = rowVals(keySheet, keyRowNo);
+  const valueSheet = sheets.find((ws) => ws !== keySheet && ws.rowCount > 2);
+  const itemTypeName = (opts.itemTypeName || valueSheet?.name || '').trim();
+  if (!itemTypeName) throw Object.assign(new Error('Could not tell which item type this file is for. Type the item type name.'), { statusCode: 400 });
+
+  // value sheet: name -> { required, max, values[] }
+  const info = new Map<string, { required: boolean; max: number; values: string[] }>();
+  if (valueSheet) {
+    const vNames = rowVals(valueSheet, 1);
+    const notes = rowVals(valueSheet, 2);
+    vNames.forEach((raw, i) => {
+      if (!raw) return;
+      const values: string[] = [];
+      for (let r = 3; r <= valueSheet.rowCount; r++) {
+        const v = cellStr(valueSheet.getRow(r).getCell(i + 1).value);
+        if (v && !/^attribute type formats|^text based attributes|^measure attributes|^value based|^number/i.test(v)) values.push(v);
+      }
+      const max = Number(notes[i]?.match(/max selections\s*(\d+)/i)?.[1] ?? 1) || 1;
+      info.set(cleanName(raw).toLowerCase(), { required: /\*\s*$/.test(raw), max, values: [...new Set(values)] });
+    });
+  }
+  // reuse an item type already added with the same name (e.g. found by search) so products keep their category
+  const existing = (await db.select().from(schema.itemTypes)).find((t) => t.name.trim().toLowerCase() === itemTypeName.toLowerCase());
+  const id = (opts.itemTypeId || '').trim() || existing?.id || `file:${itemTypeName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+  await saveItemTypes([{ id, name: itemTypeName }]);
+  let attrs = 0, withValues = 0;
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i];
+    if (!key || META_KEYS.has(key)) continue;
+    const name = cleanName(names[i] || key);
+    const inf = info.get(name.toLowerCase());
+    const vals = inf?.values ?? [];
+    let type = 'TEXT';
+    if (vals.length === 1 && /^(TEXT|NUMBER|INTEGER)$/i.test(vals[0])) type = vals[0].toUpperCase();
+    else if (vals.length === 1 && UNITS.test(vals[0])) type = 'MEASURE';
+    else if (vals.length >= 1) type = 'VALUE';
+    else if (/^package_dimensions\./.test(key)) type = 'MEASURE';
+    const group = /^compliance\.tax/.test(key) ? 'TAX' : /^fulfillment\.|^shipping_exclusion|^seller_return_policy/.test(key) ? 'LOGISTICS' : key.includes('.') || key.includes('[') || key.startsWith('variation') ? 'CORE' : 'SELLING';
+    const row = {
+      itemTypeId: id, attributeId: key, taxonomyId: key.includes('.') ? 'root' : id, name, mappedProperty: key.includes('.') || key.includes('[') || key.includes('_') ? key : null,
+      type, group, required: !!inf?.required, maxSelections: inf?.max ?? 1, description: null, raw: { source: 'file' }, valuesFetched: true,
+    };
+    const [saved] = await db.insert(schema.attributes).values(row).onConflictDoUpdate({ target: [schema.attributes.itemTypeId, schema.attributes.attributeId], set: row }).returning({ id: schema.attributes.id });
+    attrs++;
+    await db.delete(schema.attributeValues).where(eq(schema.attributeValues.attrId, saved.id));
+    const list = type === 'VALUE' || type === 'MEASURE' ? vals : [];
+    if (list.length) {
+      withValues++;
+      const rows = list.map((v, n) => ({ attrId: saved.id, valueId: `${n}:${v}`.slice(0, 200), name: v }));
+      for (let k = 0; k < rows.length; k += 500) await db.insert(schema.attributeValues).values(rows.slice(k, k + 500)).onConflictDoNothing();
+    }
+  }
+  await db.update(schema.itemTypes).set({ attributesFetchedAt: new Date(), valuesFetchedAt: new Date() }).where(eq(schema.itemTypes.id, id));
+  return { itemTypeId: id, itemTypeName, attributes: attrs, valueLists: withValues };
+}

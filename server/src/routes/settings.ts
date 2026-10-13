@@ -6,7 +6,7 @@ import {
   ShopifySettings, SyncSettings, TargetCredentials, TargetEnvName,
 } from '../lib/settings.js';
 import { DEFAULT_SHOPIFY_API_VERSION, normalizeShopDomain, SHOP_QUERY, shopifyGraphql } from '../shopify/client.js';
-import { OAUTH_DEFAULTS, targetRequest, hostFor } from '../target/client.js';
+import { OAUTH_DEFAULTS, targetRequest, hostFor, taxonomyWayInUse } from '../target/client.js';
 
 const ENVS: TargetEnvName[] = ['stage', 'production'];
 const SECRET_KEEP = '__keep__'; // UI sends this to leave a secret unchanged
@@ -104,6 +104,16 @@ export default async function (app: FastifyInstance) {
     await run('Reports API', async () => {
       const r = await targetRequest('sellers', 'GET', `/sellers/${encodeURIComponent(creds.sellerId ?? '')}/report_requests`, { env: e, query: { per_page: 1 }, source: 'connection-test', retries: 0 });
       return `HTTP ${r.status}`;
+    });
+    await run('Taxonomy API (item type fields)', async () => {
+      const r = await targetRequest('taxonomy', 'GET', '/attribute_values', { env: e, query: { taxonomy_id: 'root', attribute_id: 'compliance.import_designation', target: 'EXTERNAL', per_page: 5 }, source: 'connection-test', retries: 0 })
+        .catch(async (err: any) => {
+          // that probe can fail for reasons other than auth; fall back to a plain item type listing
+          if (err?.status && ![401, 403].includes(err.status)) return targetRequest('taxonomy', 'GET', '/taxonomies', { env: e, query: { type: 'ITEM_TYPE', target: 'EXTERNAL', per_page: 1 }, source: 'connection-test', retries: 0 });
+          throw err;
+        });
+      const w = taxonomyWayInUse(e);
+      return `HTTP ${r.status}${w ? ` via ${w.host}${w.keyOnly ? ' (API key only)' : ''}` : ''}`;
     });
     return { env: e, checks };
   });

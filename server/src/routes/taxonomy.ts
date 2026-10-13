@@ -4,7 +4,7 @@ import { db, schema } from '../db/index.js';
 import { runJob } from '../jobs/scheduler.js';
 import * as T from '../target/api.js';
 import { SOURCE_FIELDS, attrKey, MappingRule } from '../services/builder.js';
-import { itemTypeSummary, parseAllowedItemTypes, saveItemTypes, syncAttributes, syncSetupData, syncValues } from '../services/taxonomy.js';
+import { importAttributeFile, itemTypeSummary, parseAllowedItemTypes, saveItemTypes, syncAttributes, syncSetupData, syncValues } from '../services/taxonomy.js';
 
 const progress = new Map<string, { done: number; total: number }>();
 
@@ -40,6 +40,18 @@ export default async function (app: FastifyInstance) {
     if (!types.length) throw Object.assign(new Error('No item types found in the file (need item type id + name columns)'), { statusCode: 400 });
     await saveItemTypes(types);
     return { count: types.length };
+  });
+
+  /** Upload Target's "Attributes And Values" / Bulk Product Data Template Excel: creates the item type with all its fields and values. */
+  app.post('/api/taxonomy/import-attributes', async (req) => {
+    const parts = req.parts();
+    let buf: Buffer | null = null; const fields: Record<string, string> = {};
+    for await (const part of parts) {
+      if (part.type === 'file') buf = await part.toBuffer();
+      else fields[part.fieldname] = String((part as any).value ?? '');
+    }
+    if (!buf) throw Object.assign(new Error('No file'), { statusCode: 400 });
+    return importAttributeFile(buf, { itemTypeId: fields.itemTypeId, itemTypeName: fields.itemTypeName });
   });
 
   app.get('/api/taxonomy/item-types/:id', async (req) => {

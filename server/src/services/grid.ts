@@ -328,22 +328,24 @@ function containsSeq(hay: string[], needle: string[]) {
   return false;
 }
 
-function pickByText(allowed: string[], corpus: Corpus, max: number): string[] {
-  const scored: { v: string; s: number }[] = [];
+function pickByText(allowed: string[], corpus: Corpus, max: number, minWeight = 2): string[] {
+  const scored: { v: string; s: number; w: number }[] = [];
   for (const v of allowed) {
     const n = normalize(v);
     if (GENERIC_VALUES.has(n)) continue;
     const t = toks(v);
     if (!t.length) continue;
-    let best = 0;
-    for (const f of corpus.fields) if (containsSeq(f.t, t)) best = Math.max(best, f.w * t.length + v.length / 100);
-    if (best) scored.push({ v, s: best });
+    let best = 0, bestW = 0;
+    for (const f of corpus.fields) if (f.w >= minWeight && containsSeq(f.t, t)) { const sc = f.w * t.length + v.length / 100; if (sc > best) { best = sc; bestW = f.w; } }
+    if (best) scored.push({ v, s: best, w: bestW });
   }
   scored.sort((a, b) => b.s - a.s);
-  // drop values that are only a part of a longer matched value ("Leather" when "Faux Leather" matched)
+  // drop values that are only a part of a longer matched value ("Leather" when "Faux Leather" matched);
+  // extra values (multi-select) only when they come from the title / options, never from the description
   const out: string[] = [];
   for (const x of scored) {
     if (out.some((o) => containsSeq(toks(o), toks(x.v)))) continue;
+    if (out.length && x.w < 4) continue;
     out.push(x.v);
     if (out.length >= max) break;
   }
@@ -376,13 +378,18 @@ function pickSize(allowed: string[], size: string): string | null {
   return null;
 }
 
+// fields that must come from the product/manufacturer, not from text matching (secondary materials, licenses, claims…)
+const NO_GUESS = /\b[2-9]\b|lining|licen[cs]e|personality|property|percentage|certif|claim|carbon|oeko|qualifier|warning|season|sport|theme|character|net content|contents/i;
+
 function smartValue(a: Attribute, allowed: string[], c: Corpus): string | null {
   const name = a.name.toLowerCase();
+  if (!a.required && NO_GUESS.test(a.name)) return null;
   const isYesNo = allowed.length > 0 && allowed.every((x) => /^(yes|no|true|false)$/i.test(x.trim()));
   if (isYesNo) return null; // never guess yes/no flags
   if (/colou?r/.test(name)) { const v = pickColor(allowed, c.color); if (v) return v; }
   if (/\bsize\b/.test(name) && !/group|range|type|chart/.test(name)) { const v = pickSize(allowed, c.size); if (v) return v; }
-  const picked = pickByText(allowed, c, Math.max(1, a.maxSelections));
+  // optional attributes: only fill from strong signals (options, title, product type, tags), never guess from the description
+  const picked = pickByText(allowed, c, Math.max(1, a.maxSelections), a.required ? 2 : 3);
   if (picked.length) return picked.join('|');
   if (/age|audience/.test(name)) { const adult = allowed.find((x) => /^adults?$/i.test(x)); if (adult && c.fields.some((f) => f.t.some((t) => ['women', 'men', 'ladie', 'lady', 'mujer', 'adult'].includes(t)))) return adult; }
   return null;

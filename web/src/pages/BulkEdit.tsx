@@ -247,6 +247,7 @@ function AddCategories({ onClose, onStarted }: { onClose: () => void; onStarted:
   const [found, setFound] = useState<{ id: string; name: string }[] | null>(null);
   const [pick, setPick] = useState<Record<string, string>>({});
   const [manual, setManual] = useState({ id: '', name: '' });
+  const [fileMeta, setFileMeta] = useState({ id: '', name: '' });
   const { busy, run } = useAction();
   const search = () => run('find', async () => {
     const r: any = await get(`/api/taxonomy/search?name=${encodeURIComponent(name.trim())}`);
@@ -272,6 +273,20 @@ function AddCategories({ onClose, onStarted }: { onClose: () => void; onStarted:
             ))}
           </Card>
         ))}
+        <Card title="Best way on stage: upload Target's Attributes & Values file">
+          <div className="stack small">
+            <div className="muted">In the Target portal go to <strong>Reports › Item Data › Attributes &amp; Values › Generate Report</strong>, pick the category (e.g. Flats and Slip Ons), download the Excel and upload it here. Target Hub reads every field, which ones are required and all dropdown values from it.</div>
+            <div className="row">
+              <input style={{ width: 230 }} placeholder="Item type ID (optional)" value={fileMeta.id} onChange={(e) => setFileMeta({ ...fileMeta, id: e.target.value })} />
+              <input style={{ flex: 1 }} placeholder="Name (optional, read from the file)" value={fileMeta.name} onChange={(e) => setFileMeta({ ...fileMeta, name: e.target.value })} />
+            </div>
+            <input type="file" accept=".xlsx" disabled={busy === 'file'} onChange={(e) => {
+              const f = e.target.files?.[0]; if (!f) return;
+              const fd = new FormData(); fd.append('itemTypeId', fileMeta.id.trim()); fd.append('itemTypeName', fileMeta.name.trim()); fd.append('file', f);
+              run('file', () => api('/api/taxonomy/import-attributes', { form: fd }), (r: any) => `${r.itemTypeName}: ${r.attributes} fields and ${r.valueLists} dropdown lists loaded`).then((r) => { e.target.value = ''; if (r) { onStarted(); onClose(); } });
+            }} />
+          </div>
+        </Card>
         <details>
           <summary className="small muted" style={{ cursor: 'pointer' }}>I know the item type ID</summary>
           <div className="row" style={{ marginTop: 8 }}>
@@ -316,7 +331,7 @@ function CategorySetup({ types, onDone }: { types: any[]; onDone: () => void }) 
   const errorBox = st?.error && (
     <div className="small bad" style={{ marginTop: 8 }}>
       <strong>It didn't work:</strong> {st.error}
-      <div className="muted" style={{ marginTop: 4 }}>No problem: use <strong>Add categories by name</strong> instead (type "Flats and Slip Ons", "Boots"… and add them). You can also send this message to your developer.</div>
+      <div className="muted" style={{ marginTop: 4 }}>No problem: click <strong>Add categories</strong> and upload the Attributes &amp; Values Excel from the Target portal (Reports › Item Data), one per category. You can also send this message to your developer.</div>
     </div>
   );
   if (!types.length) {
@@ -329,7 +344,7 @@ function CategorySetup({ types, onDone }: { types: any[]; onDone: () => void }) 
         </div>
         <div className="stack" style={{ flex: 'none' }}>
           <Btn kind="primary" busy={busy === 'setup'} onClick={() => start({})}>Load my categories from Target</Btn>
-          <Btn onClick={() => setAddOpen(true)}>Add categories by name</Btn>
+          <Btn onClick={() => setAddOpen(true)}>Add categories (file / name / ID)</Btn>
         </div>
         {modal}
       </div>

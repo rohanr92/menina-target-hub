@@ -93,11 +93,12 @@ async function doRefresh(envName: TargetEnvName, creds: TargetCredentials): Prom
   return next;
 }
 
-export async function authHeaders(envName: TargetEnvName, opts: { forDownload?: boolean } = {}) {
+export async function authHeaders(envName: TargetEnvName, opts: { forDownload?: boolean; keyOnly?: boolean } = {}) {
   let creds = await getTargetCreds(envName);
   if (!creds.apiKey || !creds.sellerId) throw new TargetError(`Target ${envName} credentials are not set. Add them in Settings.`, 0, null, '');
   const mode = creds.authMode ?? 'seller_token';
   const h: Record<string, string> = { 'x-api-key': creds.apiKey, 'x-seller-id': creds.sellerId };
+  if (opts.keyOnly) return { headers: h, creds };
   if ((mode === 'seller_token' || mode === 'both') && creds.sellerToken) h['x-seller-token'] = creds.sellerToken;
   if (mode === 'oauth' || mode === 'both') {
     creds = await refreshIfNeeded(envName, creds);
@@ -116,6 +117,8 @@ export interface RequestOpts {
   retries?: number;
   /** POST that creates something (item, fulfillment): only retry when Target clearly rejected it (429). */
   nonIdempotent?: boolean;
+  /** send only x-api-key + x-seller-id (no seller token / bearer) */
+  keyOnly?: boolean;
 }
 
 export interface TargetResponse<T = any> {
@@ -125,14 +128,46 @@ export interface TargetResponse<T = any> {
   total?: number;
 }
 
+/**
+ * Taxonomy on stage: the guide and the kickoff deck point the Taxonomy API at api.target.com, and stage-api answers 401
+ * for it. So for taxonomy we try (host, auth) combinations in order and remember the first that works.
+ */
+type TaxoWay = { host: string; keyOnly: boolean };
+const taxoWayCache = new Map<TargetEnvName, TaxoWay>();
+export function taxonomyWays(envName: TargetEnvName, creds: TargetCredentials): TaxoWay[] {
+  if (creds.hostOverride) return [{ host: hostFor(envName, creds), keyOnly: false }];
+  const own = DEFAULT_HOST[envName], prod = DEFAULT_HOST.production;
+  const ways: TaxoWay[] = [{ host: own, keyOnly: false }, { host: prod, keyOnly: false }, { host: prod, keyOnly: true }, { host: own, keyOnly: true }];
+  return ways.filter((w, i) => ways.findIndex((x) => x.host === w.host && x.keyOnly === w.keyOnly) === i);
+}
+
 export async function targetRequest<T = any>(api: Api, method: string, path: string, opts: RequestOpts = {}): Promise<TargetResponse<T>> {
   const envName = opts.env ?? (await getActiveEnv());
-  const url = new URL((await baseUrl(api, envName)) + path);
-  for (const [k, v] of Object.entries(opts.query ?? {})) {
-    if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
+  const build = (host: string) => {
+    const url = new URL(host + BASE_PATH[api] + path);
+    for (const [k, v] of Object.entries(opts.query ?? {})) {
+      if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
+    }
+    return url.toString();
+  };
+  if (api !== 'taxonomy') return rawRequest<T>(envName, method, build(hostFor(envName, await getTargetCreds(envName))), opts);
+  const creds = await getTargetCreds(envName);
+  const cached = taxoWayCache.get(envName);
+  const ways = cached ? [cached, ...taxonomyWays(envName, creds).filter((w) => w.host !== cached.host || w.keyOnly !== cached.keyOnly)] : taxonomyWays(envName, creds);
+  let last: any;
+  for (const w of ways) {
+    try {
+      const r = await rawRequest<T>(envName, method, build(w.host), { ...opts, keyOnly: w.keyOnly, retries: Math.min(opts.retries ?? 2, 2) });
+      taxoWayCache.set(envName, w);
+      return r;
+    } catch (e: any) {
+      last = e;
+      if (!(e instanceof TargetError) || ![401, 403, 404].includes(e.status)) throw e;
+    }
   }
-  return rawRequest<T>(envName, method, url.toString(), opts);
+  throw last;
 }
+export const taxonomyWayInUse = (envName: TargetEnvName) => taxoWayCache.get(envName) ?? null;
 
 /** Request against an absolute URL (e.g. a report download_url). */
 export async function rawRequest<T = any>(envName: TargetEnvName, method: string, url: string, opts: RequestOpts & { forDownload?: boolean; accept?: string } = {}): Promise<TargetResponse<T>> {
@@ -141,7 +176,7 @@ export async function rawRequest<T = any>(envName: TargetEnvName, method: string
   let attempt = 0;
   for (;;) {
     attempt++;
-    const { headers } = await authHeaders(envName, { forDownload: opts.forDownload });
+    const { headers } = await authHeaders(envName, { forDownload: opts.forDownload, keyOnly: opts.keyOnly });
     if (bodyText) headers['content-type'] = 'application/json';
     headers['accept'] = opts.accept ?? 'application/json';
     await throttle();
