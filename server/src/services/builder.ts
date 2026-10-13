@@ -118,6 +118,7 @@ interface Ctx {
   p: Product; v: Variant | null; vs: Variant[]; level: 'SA' | 'VAP' | 'VC'; theme: Theme;
   itemTypeName: string; size: string; color: string; stage: boolean; forceBrand: string; images: string[]; useMock: boolean;
   titles: SyncTitles;
+  sizeKeys: string[]; // the item type's own size fields (e.g. "Shoe Size"), used for the title
   src?: string; original?: string; // set by resolve(): where the value came from
 }
 
@@ -155,13 +156,22 @@ function tplVars(c: Ctx) {
   };
 }
 
+/**
+ * Title tokens come from the Target fields of the SKU (what you set in Bulk mapping / Auto-map),
+ * falling back to Shopify: brand field, color field, size field (US) + the Shopify EU size.
+ */
 function titleVars(c: Ctx): Record<string, string> {
-  const ov = (k: string) => { const v = (c.v?.overrides as any)?.[k] ?? (c.p.overrides as any)?.[k]; return v && v !== NONE ? String(v) : ''; };
+  const ov = (k: string) => { const v = (c.v?.overrides as any)?.[k] ?? (c.p.overrides as any)?.[k]; return v && v !== NONE ? String(Array.isArray(v) ? v[0] : v).split('|')[0].trim() : ''; };
+  const chart = parseSizeChart(c.titles.sizeChart);
+  const brand = ov('brands.name') || c.p.vendor || '';
   const color = ov('child_variations.color') || c.color;
-  const size = ov('child_variations.size') || c.size;
-  const brand = c.p.vendor ?? '';
-  const { us, eu } = sizePair(c.size || size, parseSizeChart(c.titles.sizeChart));
-  return { brand, audience: c.titles.audience, name: cleanTitleName(c.p.title, brand, c.color, c.size), color, size, us, eu };
+  // size typed / mapped in a Target size field wins over the Shopify option
+  const fieldSize = ov('child_variations.size') || c.sizeKeys.map(ov).find(Boolean) || '';
+  const fromField = fieldSize ? sizePair(fieldSize, chart) : { us: '', eu: '' };
+  const fromShopify = sizePair(c.size, chart);
+  const us = fromField.us || fromShopify.us;
+  const eu = fromShopify.eu || fromField.eu || [...chart.entries()].find(([, x]) => x === us)?.[0] || '';
+  return { brand, audience: c.titles.audience, name: cleanTitleName(c.p.title, c.p.vendor ?? brand, c.color, c.size), color, size: fieldSize || c.size, us, eu };
 }
 
 /** Built-in defaults for core Target attributes (used when the rule is "auto"). */
@@ -231,6 +241,8 @@ function resolve(key: string, rule: MappingRule | undefined, c: Ctx): string | u
   c.original = undefined;
   const vov = (c.v?.overrides as any)?.[key];
   const ov = vov ?? (c.p.overrides as any)?.[key];
+  // stage only accepts the test brand, even if you typed your real brand on the SKU (your brand still goes in the title)
+  if (key === 'brands.name' && c.stage && c.forceBrand) { c.src = 'Stage rule (Target requires Valor Fitness)'; return c.forceBrand; }
   if (ov === NONE) { c.src = 'Left empty on purpose'; return undefined; }
   if (ov !== undefined && ov !== null && ov !== '') { c.src = vov !== undefined ? 'Override (this variant)' : 'Override (this product)'; return Array.isArray(ov) ? ov.join('|') : String(ov); }
   if (key === 'brands.name' && c.stage && c.forceBrand) { c.src = 'Stage rule (Target requires Valor Fitness)'; return c.forceBrand; }
@@ -311,6 +323,7 @@ export async function buildProduct(productId: string): Promise<BuildResult> {
   const keys = [...new Set([...contentAttrs.map(attrKey), ...coreKeys, ...taxo.rules.filter((r) => r.source !== 'skip').map((r) => r.key)])]
     .filter((k) => !logisticsKeys.has(k) && !LOGISTICS_KEYS.has(k));
   const attrByKey = new Map(contentAttrs.map((a) => [attrKey(a), a]));
+  const sizeKeys = contentAttrs.filter((a) => /\bsize\b/i.test(a.name) && !/group|range|type|chart|system|grouping/i.test(a.name)).map(attrKey);
 
   const makeFields = (c: Ctx, scope: string): Field[] => {
     const fields: Field[] = [{ name: 'item_type.name', value: itemType.name }];
@@ -335,7 +348,7 @@ export async function buildProduct(productId: string): Promise<BuildResult> {
   };
 
   const ctxFor = (v: Variant | null, level: Ctx['level']): Ctx => ({
-    p, v, vs, level, theme, itemTypeName: itemType.name, stage, forceBrand: sync.stage.forceBrand, images, useMock: sync.stage.useMockBarcodes, titles: sync.titles,
+    p, v, vs, level, theme, itemTypeName: itemType.name, stage, forceBrand: sync.stage.forceBrand, images, useMock: sync.stage.useMockBarcodes, titles: sync.titles, sizeKeys,
     size: v && sizeOption ? String((v.options as any)[sizeOption] ?? '') : '',
     color: v && colorOption ? String((v.options as any)[colorOption] ?? '') : '',
   });
