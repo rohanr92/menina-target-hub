@@ -10,15 +10,25 @@ export async function parseAllowedItemTypes(data: any, contentType = ''): Promis
   if (Buffer.isBuffer(data) || data instanceof ArrayBuffer || /sheet|excel|octet/.test(contentType)) {
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(Buffer.from(data as any) as any);
-    const ws = wb.worksheets[0];
-    const header: string[] = [];
-    ws.getRow(1).eachCell((c, i) => { header[i] = String(c.value ?? '').trim(); });
-    ws.eachRow((row, n) => {
-      if (n === 1) return;
-      const o: any = {};
-      row.eachCell((c, i) => { o[header[i] || `col${i}`] = (c.value as any)?.text ?? c.value; });
-      rows.push(o);
-    });
+    // Target's Excel report may have a title row first: find the header row (has an id and a name column) on any sheet
+    for (const ws of wb.worksheets) {
+      const grid: string[][] = [];
+      ws.eachRow({ includeEmpty: true }, (row, n) => {
+        const vals: string[] = [];
+        row.eachCell({ includeEmpty: true }, (c, i) => { const v: any = c.value; vals[i - 1] = String(v?.text ?? v?.result ?? v ?? '').trim(); });
+        grid[n - 1] = Array.from(vals, (x) => x ?? '');
+      });
+      const h = grid.findIndex((r, i) => i < 15 && r && r.some((x) => /item.?type.?id|taxonomy.?id|^id$/i.test(x)) && r.some((x) => /name|item.?type$/i.test(x)));
+      if (h < 0) continue;
+      const header = grid[h];
+      for (const r of grid.slice(h + 1)) {
+        if (!r) continue;
+        const o: any = {};
+        header.forEach((k, i) => { if (k) o[k] = r[i]; });
+        rows.push(o);
+      }
+      if (rows.length) break;
+    }
   } else if (typeof data === 'string') {
     const t = data.trim();
     if (t.startsWith('[') || t.startsWith('{')) rows = toArray(JSON.parse(t));

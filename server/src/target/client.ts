@@ -155,11 +155,19 @@ export async function rawRequest<T = any>(envName: TargetEnvName, method: string
       // ambiguous: Target may or may not have processed it. Callers reconcile before retrying.
       throw Object.assign(new TargetError(`Network error calling Target: ${e?.message ?? e}`, 0, null, url), { ambiguous: true });
     }
-    const text = await res.text();
+    // downloads (reports) can be Excel files: read raw bytes so they are not corrupted by text decoding
+    let binary: Buffer | null = null;
+    let text: string;
+    if (opts.forDownload) {
+      const buf = Buffer.from(await res.arrayBuffer());
+      const ctype = res.headers.get('content-type') ?? '';
+      const isBin = /spreadsheet|excel|octet-stream|zip/i.test(ctype) || (buf.length > 3 && buf[0] === 0x50 && buf[1] === 0x4b);
+      if (isBin) { binary = buf; text = ''; } else text = buf.toString('utf8');
+    } else text = await res.text();
     const durationMs = Date.now() - started;
     await logApi({
       service: 'target', env: envName, method, url, status: res.status, durationMs,
-      requestBody: bodyText, responseBody: opts.hideResponse && res.ok ? '[hidden: contains customer data]' : text,
+      requestBody: bodyText, responseBody: binary ? `[file, ${binary.length} bytes]` : opts.hideResponse && res.ok ? '[hidden: contains customer data]' : text,
       source: opts.source,
     });
     if ((res.status === 429 || (res.status >= 500 && !opts.nonIdempotent)) && attempt <= maxRetries) {
@@ -167,9 +175,9 @@ export async function rawRequest<T = any>(envName: TargetEnvName, method: string
       await sleep(Number.isFinite(ra) && ra > 0 ? ra * 1000 : backoff(attempt));
       continue;
     }
-    let data: any = text;
+    let data: any = binary ?? text;
     const ct = res.headers.get('content-type') ?? '';
-    if (text && (ct.includes('json') || /^[\[{]/.test(text.trim()))) {
+    if (!binary && text && (ct.includes('json') || /^[\[{]/.test(text.trim()))) {
       try { data = JSON.parse(text); } catch { /* keep text */ }
     }
     if (!res.ok) {

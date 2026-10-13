@@ -703,18 +703,34 @@ export function startCategorySetup(opts: { onlyIds?: string[]; withValues?: bool
   (async () => {
     try {
       if (!opts.onlyIds?.length && !opts.skipReport) {
-        setupState.step = 'Asking Target for your allowed item types (ALLOWED_ITEM_TYPES report)';
-        const r = await requestReport({ type: 'ALLOWED_ITEM_TYPES', format: 'JSON' });
-        let status = r.status;
-        for (let i = 0; i < 60 && status !== 'COMPLETE'; i++) {
-          if (['CANCELED', 'CANCELLED', 'ERROR', 'FAILED'].includes(String(status).toUpperCase())) throw new Error(`Target report ended with status ${status}`);
-          setupState.step = `Waiting for Target to build the report (${status?.toLowerCase() ?? 'pending'})…`;
-          await sleep(i < 5 ? 3000 : 6000);
-          status = (await refreshReport(r.id)).status;
+        // Target's Insomnia collection asks for EXCEL; the guide shows JSON. Try both (and CSV) before giving up.
+        const problems: string[] = [];
+        let imported = false;
+        for (const format of ['EXCEL', 'JSON', 'CSV']) {
+          try {
+            setupState.step = `Asking Target for your allowed item types (ALLOWED_ITEM_TYPES report, ${format})`;
+            const r = await requestReport({ type: 'ALLOWED_ITEM_TYPES', format });
+            let rep: any = r;
+            for (let i = 0; i < 60 && rep.status !== 'COMPLETE'; i++) {
+              if (['CANCELED', 'CANCELLED', 'ERROR', 'FAILED'].includes(String(rep.status).toUpperCase())) break;
+              setupState.step = `Waiting for Target to build the report (${format}, ${String(rep.status ?? 'pending').toLowerCase()})…`;
+              await sleep(i < 5 ? 3000 : 6000);
+              rep = await refreshReport(r.id);
+            }
+            if (rep.status !== 'COMPLETE') {
+              const errs = (rep.raw?.errors ?? []).map((e: any) => (typeof e === 'string' ? e : e?.message ?? e?.reason ?? JSON.stringify(e))).join('; ');
+              problems.push(`${format}: report ${rep.status}${errs ? ` (${errs})` : ''}`);
+              continue;
+            }
+            setupState.step = 'Downloading the report and saving item types';
+            await importAllowedItemTypes(r.id);
+            imported = true;
+            break;
+          } catch (e: any) {
+            problems.push(`${format}: ${e?.message ?? e}`);
+          }
         }
-        if (status !== 'COMPLETE') throw new Error('Target is still building the report. Try again in a few minutes (Taxonomy page › Check status also works).');
-        setupState.step = 'Downloading the report and saving item types';
-        await importAllowedItemTypes(r.id);
+        if (!imported) throw new Error(`Target could not give the allowed item types report. ${problems.join(' · ')}`);
       }
       let types = await db.select().from(schema.itemTypes).orderBy(asc(schema.itemTypes.name));
       if (opts.onlyIds?.length) types = types.filter((t) => opts.onlyIds!.includes(t.id));

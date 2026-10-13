@@ -14,7 +14,7 @@ export default function Taxonomy() {
   const allowed = (reports.data?.reports ?? []).filter((r: any) => r.type === 'ALLOWED_ITEM_TYPES');
   const latest = allowed[0];
 
-  const request = () => run('req', () => post('/api/reports', { type: 'ALLOWED_ITEM_TYPES', format: 'JSON' }), 'Report requested. Refresh in a minute.').then(reports.reload);
+  const request = () => run('req', () => post('/api/reports', { type: 'ALLOWED_ITEM_TYPES', format: 'EXCEL' }), 'Report requested. Refresh in a minute.').then(reports.reload);
   const refresh = () => run('ref', () => post(`/api/reports/${latest.id}/refresh`)).then(reports.reload);
   const importTypes = () => run('imp', () => post(`/api/reports/${latest.id}/import-item-types`), (r: any) => `${r.count} item types loaded`).then(types.reload);
   const upload = async (file: File) => {
@@ -85,4 +85,3 @@ export default function Taxonomy() {
     </div>
   );
 }
-
