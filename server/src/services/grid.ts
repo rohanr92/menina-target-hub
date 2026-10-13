@@ -256,7 +256,7 @@ export async function saveCells(cells: CellChange[], opts: { auto?: boolean } = 
       const flag = new Map<string, boolean>(vs.map((v) => [v.id, vov.get(v.id)![key] !== undefined ? vAuto.get(v.id)!.has(key) : pAuto.has(key)]));
       for (const c of list.filter((x) => x.key === key)) {
         const raw = Array.isArray(c.value) ? c.value.join('|') : c.value === null || c.value === undefined ? '' : String(c.value).trim();
-        want.set(c.variantId, raw === '' ? undefined : raw);
+        want.set(c.variantId, raw === '' || raw.toLowerCase() === '(auto)' ? undefined : raw); // "(auto)" = back to the automatic value
         flag.set(c.variantId, !!opts.auto);
         count++;
       }

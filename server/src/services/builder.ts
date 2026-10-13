@@ -9,6 +9,41 @@ import { mockUpc, validateBarcode } from './barcode.js';
 import { descriptionWithoutList, fillTemplate, hasHtml, normalize, stripHtml, wordCount } from './text.js';
 
 export type Theme = 'SA' | 'size' | 'color' | 'size and color';
+export type SyncTitles = { child: string; standalone: string; parent: string; audience: string; sizeChart: string };
+
+// ---------------- titles: "{brand} Women's {name} {color} {us} US / {eu} EU" ----------------
+export function parseSizeChart(chart: string): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const part of (chart || '').split(/[,;\n]+/)) {
+    const [eu, us] = part.split(/[=:]/).map((x) => x?.trim().replace(',', '.'));
+    if (eu && us) m.set(eu, us);
+  }
+  return m;
+}
+export function sizePair(size: string, chart: Map<string, string>): { us: string; eu: string } {
+  const n = (size || '').replace(',', '.').match(/\d+(\.\d+)?/)?.[0];
+  if (!n) return { us: '', eu: '' };
+  if (Number(n) >= 30) return { eu: n, us: chart.get(n) ?? '' };
+  const eu = [...chart.entries()].find(([, us]) => us === n)?.[0] ?? '';
+  return { us: n, eu };
+}
+/** Shopify title without the brand, the audience word and a trailing color / size. */
+export function cleanTitleName(title: string, brand: string, color: string, size: string): string {
+  let t = ` ${title} `;
+  const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (brand) t = t.replace(new RegExp(`\\s${esc(brand)}(?=\\s)`, 'i'), ' ');
+  t = t.replace(/\s(women'?s?|womens|woman'?s|ladies'?|mujer)(?=\s)/i, ' ');
+  for (const x of [size, color]) if (x) t = t.replace(new RegExp(`[\\s\\-–/|,]*${esc(x)}\\s*$`, 'i'), ' ');
+  return t.replace(/\s*[-–|,/]\s*$/, '').replace(/\s+/g, ' ').trim();
+}
+export function renderTitle(tpl: string, vars: Record<string, string>): string {
+  const tok = (k: string) => (vars[k] ?? '').toString().trim();
+  const withGroups = tpl.replace(/\[([^\]]*)\]/g, (_, inner: string) => {
+    const ks = [...inner.matchAll(/\{(\w+)\}/g)].map((m) => m[1]);
+    return ks.every((k) => tok(k)) ? inner : '';
+  });
+  return withGroups.replace(/\{(\w+)\}/g, (_, k) => tok(k)).replace(/\s+/g, ' ').replace(/\s+([,/])/g, ' $1').trim();
+}
 
 export interface MappingRule {
   key: string; // mapped_property or attribute_id (the "name" sent to Target)
@@ -32,7 +67,7 @@ export interface BuildResult {
 }
 
 const AUTO_DESC: Record<string, string> = {
-  'brands.name': 'Shopify vendor', 'descriptions.title': 'Shopify title + color/size', 'descriptions.parent_title': 'Shopify title',
+  'brands.name': 'Shopify vendor', 'descriptions.title': 'Title rule (Settings › Product titles)', 'descriptions.parent_title': 'Title rule (Settings › Product titles)',
   'descriptions.long_description': 'Shopify description (HTML removed)', 'barcode.value': 'Shopify barcode',
   'digital_assets.images.primary_image_url': 'Shopify variant image / first image', 'digital_assets.images.parent_image_url': 'Shopify first image',
   'package_dimensions.measurements.weight': 'Shopify weight (lb)', 'child_variations.size': 'Shopify size option', 'child_variations.color': 'Shopify color option',
@@ -82,6 +117,7 @@ function defaultTaxCode(itemTypeName: string) {
 interface Ctx {
   p: Product; v: Variant | null; vs: Variant[]; level: 'SA' | 'VAP' | 'VC'; theme: Theme;
   itemTypeName: string; size: string; color: string; stage: boolean; forceBrand: string; images: string[]; useMock: boolean;
+  titles: SyncTitles;
   src?: string; original?: string; // set by resolve(): where the value came from
 }
 
@@ -119,6 +155,15 @@ function tplVars(c: Ctx) {
   };
 }
 
+function titleVars(c: Ctx): Record<string, string> {
+  const ov = (k: string) => { const v = (c.v?.overrides as any)?.[k] ?? (c.p.overrides as any)?.[k]; return v && v !== NONE ? String(v) : ''; };
+  const color = ov('child_variations.color') || c.color;
+  const size = ov('child_variations.size') || c.size;
+  const brand = c.p.vendor ?? '';
+  const { us, eu } = sizePair(c.size || size, parseSizeChart(c.titles.sizeChart));
+  return { brand, audience: c.titles.audience, name: cleanTitleName(c.p.title, brand, c.color, c.size), color, size, us, eu };
+}
+
 /** Built-in defaults for core Target attributes (used when the rule is "auto"). */
 function autoValue(key: string, c: Ctx): string | undefined {
   const { p, v } = c;
@@ -131,12 +176,8 @@ function autoValue(key: string, c: Ctx): string | undefined {
   }
   switch (key) {
     case 'brands.name': return c.stage && c.forceBrand ? c.forceBrand : p.vendor ?? undefined;
-    case 'descriptions.title': {
-      if (c.level === 'SA') return p.title;
-      const tail = c.theme === 'size and color' ? `${c.color} ${c.size}` : c.theme === 'color' ? c.color : c.size;
-      return fillTemplate(`{title} - ${tail}`, tplVars(c));
-    }
-    case 'descriptions.parent_title': return p.title;
+    case 'descriptions.title': return renderTitle(c.level === 'SA' ? c.titles.standalone : c.titles.child, titleVars(c)) || p.title;
+    case 'descriptions.parent_title': return renderTitle(c.titles.parent, titleVars({ ...c, v: null, size: '', color: '' })) || p.title;
     case 'descriptions.long_description': return descriptionWithoutList(p.descriptionHtml) || stripHtml(p.descriptionHtml);
     case 'barcode.value': {
       if (!v) return undefined;
@@ -294,7 +335,7 @@ export async function buildProduct(productId: string): Promise<BuildResult> {
   };
 
   const ctxFor = (v: Variant | null, level: Ctx['level']): Ctx => ({
-    p, v, vs, level, theme, itemTypeName: itemType.name, stage, forceBrand: sync.stage.forceBrand, images, useMock: sync.stage.useMockBarcodes,
+    p, v, vs, level, theme, itemTypeName: itemType.name, stage, forceBrand: sync.stage.forceBrand, images, useMock: sync.stage.useMockBarcodes, titles: sync.titles,
     size: v && sizeOption ? String((v.options as any)[sizeOption] ?? '') : '',
     color: v && colorOption ? String((v.options as any)[colorOption] ?? '') : '',
   });

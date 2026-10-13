@@ -66,6 +66,8 @@ export interface SyncSettings {
   defaultLogistics: { is_add_on: string; two_day_shipping_eligible: string; shipping_exclusion: string; seller_return_policy: string };
   carrierMap: Record<string, string>; // shopify tracking company (lowercase) -> Target shipping_method
   parentSkuPattern: string; // template for VAP external_id
+  /** Target title rules. Tokens: {brand} {audience} {name} {color} {size} {us} {eu}; [ … ] = left out when a token inside is empty */
+  titles: { child: string; standalone: string; parent: string; audience: string; sizeChart: string };
 }
 
 export const defaultSync: SyncSettings = {
@@ -88,6 +90,13 @@ export const defaultSync: SyncSettings = {
   defaultLogistics: { is_add_on: 'No', two_day_shipping_eligible: 'No', shipping_exclusion: 'No', seller_return_policy: '' },
   carrierMap: { ups: 'UPSGround', fedex: 'FedExGround', usps: 'USPSGroundAdvantage' },
   parentSkuPattern: 'VAP-{handle}',
+  titles: {
+    child: '{brand} {audience} {name} {color}[ {us} US / {eu} EU]',
+    standalone: '{brand} {audience} {name}[ {color}][ {us} US / {eu} EU]',
+    parent: '{brand} {audience} {name}',
+    audience: "Women's",
+    sizeChart: '34=4, 35=5, 36=6, 37=7, 38=8, 39=9, 40=10, 41=11, 42=12, 43=13',
+  },
 };
 
 const cache = new Map<string, any>();
@@ -127,6 +136,7 @@ export async function getSync(): Promise<SyncSettings> {
     stage: { ...defaultSync.stage, ...(s.stage ?? {}) },
     defaultLogistics: { ...defaultSync.defaultLogistics, ...(s.defaultLogistics ?? {}) },
     carrierMap: { ...defaultSync.carrierMap, ...(s.carrierMap ?? {}) },
+    titles: { ...defaultSync.titles, ...(s.titles ?? {}) },
   };
 }
 

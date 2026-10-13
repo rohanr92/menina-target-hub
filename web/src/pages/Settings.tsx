@@ -189,6 +189,19 @@ function SyncForm({ s, reload }: { s: any; reload: () => void }) {
           </div>
         </Card>
       </div>
+      <Card title="Product titles (sent to Target)">
+        <div className="stack" style={{ maxWidth: 820 }}>
+          <span className="small muted">Tokens: <code>{'{brand}'}</code> Shopify vendor · <code>{'{audience}'}</code> · <code>{'{name}'}</code> Shopify title without brand / Women's / color / size · <code>{'{color}'}</code> the Target color of the SKU · <code>{'{us}'}</code> <code>{'{eu}'}</code> sizes from the chart below · <code>{'{size}'}</code> size as in Shopify. Text in <code>[ ]</code> is left out when a token inside is empty. A title you typed yourself on a SKU always wins.</span>
+          <Field label="Size / color items (VC)"><input value={f.titles.child} onChange={(e) => set('titles.child', e.target.value)} /></Field>
+          <Field label="Stand-alone items (SA)"><input value={f.titles.standalone} onChange={(e) => set('titles.standalone', e.target.value)} /></Field>
+          <Field label="Parent (VAP) title"><input value={f.titles.parent} onChange={(e) => set('titles.parent', e.target.value)} /></Field>
+          <div className="grid2">
+            <Field label="Audience word"><input value={f.titles.audience} onChange={(e) => set('titles.audience', e.target.value)} /></Field>
+            <Field label="EU → US size chart" hint="EU=US, separated by commas"><input value={f.titles.sizeChart} onChange={(e) => set('titles.sizeChart', e.target.value)} /></Field>
+          </div>
+          <span className="small">Example: <strong>Menina Step Women's Jimena High Laces French Laced Taupe 9 US / 39 EU</strong></span>
+        </div>
+      </Card>
       <Card title="Carrier → Target shipping method (for tracking from Shopify)">
         <div className="stack" style={{ maxWidth: 560 }}>
           {Object.entries(f.carrierMap as Record<string, string>).map(([k, v]) => (

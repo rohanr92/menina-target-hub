@@ -207,6 +207,7 @@ export default async function (app: FastifyInstance) {
       stage: { ...cur.stage, ...(b.stage ?? {}) },
       defaultLogistics: { ...cur.defaultLogistics, ...(b.defaultLogistics ?? {}) },
       carrierMap: b.carrierMap ?? cur.carrierMap,
+      titles: { ...cur.titles, ...(b.titles ?? {}) },
     };
     next.requestsPerSecond = Math.max(0.2, Math.min(20, Number(next.requestsPerSecond) || 2));
     next.inventoryIntervalMin = Math.max(5, Number(next.inventoryIntervalMin) || 30);

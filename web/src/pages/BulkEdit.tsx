@@ -60,7 +60,7 @@ function Cell({ col, value, source, onCommit, bulk }: { col: Col; value: string;
         key={value + (source ?? '')}
         className={cls} title={title} list={col.type === 'VALUE' ? listId : undefined} inputMode={numeric ? 'decimal' : undefined}
         defaultValue={bulk ? '' : source === 'none' ? NONE : value}
-        placeholder={bulk ? 'Set for selected…' : col.type === 'VALUE' && col.maxSelections > 1 ? `pick up to ${col.maxSelections}, use |` : ''}
+        placeholder={bulk ? 'Set for selected… ((auto) = reset)' : col.type === 'VALUE' && col.maxSelections > 1 ? `pick up to ${col.maxSelections}, use |` : ''}
         onFocus={() => { if (col.type === 'VALUE' && !list && col.attrId) loadValues(col.attrId).then(setList); }}
         onBlur={(e) => commit(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') { (e.target as HTMLInputElement).value = bulk ? '' : value; (e.target as HTMLInputElement).blur(); } }}
