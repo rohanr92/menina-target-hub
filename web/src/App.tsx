@@ -7,6 +7,7 @@ import Settings from './pages/Settings';
 import Taxonomy from './pages/Taxonomy';
 import ItemTypeDetail from './pages/ItemTypeDetail';
 import Products from './pages/Products';
+import BulkEdit from './pages/BulkEdit';
 import ProductDetail from './pages/ProductDetail';
 import Inventory from './pages/Inventory';
 import TargetCatalog from './pages/TargetCatalog';
@@ -66,7 +67,7 @@ function StageBanner() {
 
 const NAV: [string, [string, string][]][] = [
   ['Overview', [['/', 'Dashboard'], ['/test-plan', 'Test plan']]],
-  ['Catalog', [['/products', 'Products'], ['/target-catalog', 'Target catalog'], ['/taxonomy', 'Taxonomy & mapping'], ['/inventory', 'Price & inventory'], ['/listing-errors', 'Listing errors']]],
+  ['Catalog', [['/products', 'Products'], ['/bulk', 'Bulk mapping'], ['/target-catalog', 'Target catalog'], ['/taxonomy', 'Taxonomy & mapping'], ['/inventory', 'Price & inventory'], ['/listing-errors', 'Listing errors']]],
   ['Orders', [['/orders', 'Orders'], ['/returns', 'Returns']]],
   ['Tools', [['/reports', 'Reports'], ['/console', 'API console'], ['/logs', 'API log'], ['/settings', 'Settings']]],
 ];
@@ -105,6 +106,7 @@ export default function App() {
             <Route path="/test-plan" element={<TestPlan />} />
             <Route path="/products" element={<Products />} />
             <Route path="/products/:id" element={<ProductDetail />} />
+            <Route path="/bulk" element={<BulkEdit />} />
             <Route path="/taxonomy" element={<Taxonomy />} />
             <Route path="/taxonomy/:id" element={<ItemTypeDetail />} />
             <Route path="/inventory" element={<Inventory />} />

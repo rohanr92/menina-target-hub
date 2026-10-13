@@ -156,7 +156,10 @@ function autoValue(key: string, c: Ctx): string | undefined {
   return undefined;
 }
 
-function matchAllowed(value: string, allowed: string[]): string | null {
+/** Override value meaning "send nothing for this attribute" (stops the automatic value). */
+export const NONE = '(none)';
+
+export function matchAllowed(value: string, allowed: string[]): string | null {
   if (!allowed.length) return value;
   const exact = allowed.find((a) => a.toLowerCase() === value.toLowerCase());
   if (exact) return exact;
@@ -187,6 +190,7 @@ function resolve(key: string, rule: MappingRule | undefined, c: Ctx): string | u
   c.original = undefined;
   const vov = (c.v?.overrides as any)?.[key];
   const ov = vov ?? (c.p.overrides as any)?.[key];
+  if (ov === NONE) { c.src = 'Left empty on purpose'; return undefined; }
   if (ov !== undefined && ov !== null && ov !== '') { c.src = vov !== undefined ? 'Override (this variant)' : 'Override (this product)'; return Array.isArray(ov) ? ov.join('|') : String(ov); }
   if (key === 'brands.name' && c.stage && c.forceBrand) { c.src = 'Stage rule (Target requires Valor Fitness)'; return c.forceBrand; }
   if (key === 'barcode.value' && c.stage && c.useMock && c.v?.mockBarcode) { c.src = `Stage test barcode (real: ${c.v.barcode || 'none'})`; return c.v.mockBarcode; }

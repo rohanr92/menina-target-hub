@@ -26,6 +26,7 @@ export default function Products() {
     <div className="page">
       <PageHead title="Products" sub="Shopify products become Target items: single-variant products are stand-alone (SA); products with sizes/colors become a parent (VAP) with children (VC).">
         <Btn onClick={() => setImportOpen(true)}>Import…</Btn>
+        <Btn onClick={() => nav('/bulk')}>Bulk mapping</Btn>
         <Btn busy={busy === 'refresh'} onClick={() => run('refresh', () => post('/api/products/refresh-all'), (r: any) => `Checked ${r.catalogItems} Target items, updated ${r.updated}`).then(list.reload)}>Refresh Target statuses</Btn>
       </PageHead>
 
@@ -50,6 +51,7 @@ export default function Products() {
           </select>
           <button className="btn sm" disabled={!bulkType} onClick={() => run('bulk', () => post('/api/products/bulk', { ids: [...sel], itemTypeId: bulkType }), 'Item type set').then(list.reload)}>Apply</button>
           <button className="btn sm" onClick={() => run('pushmany', () => post('/api/products/push-many', { ids: [...sel] }), (r: any[]) => `${r.filter((x) => x.ok).length} sent · ${r.filter((x) => x.blocked).length} blocked by validation · ${r.filter((x) => x.error).length} failed`).then(list.reload)}>{busy === 'pushmany' ? 'Sending…' : 'Send to Target'}</button>
+          <button className="btn sm" onClick={() => nav(`/bulk?products=${[...sel].join(',')}`)}>Open in bulk mapping</button>
           <button className="btn sm" onClick={() => setSel(new Set())}>Clear</button>
         </div>
       )}
@@ -96,6 +98,7 @@ export default function Products() {
                 <textarea rows={5} value={codes} onChange={(e) => setCodes(e.target.value)} placeholder={'Paste UPCs, EANs or SKUs: one per line, or separated by commas/spaces\n012345678905\n8435123456789\nMS-LUC-BLK-37'} />
                 <div className="row">
                   <Btn kind="primary" busy={busy === 'codes'} disabled={!codes.trim()} onClick={() => run('codes', async () => { const r = await post('/api/products/import/codes', { codes }); setCodeResult(r); list.reload(); return r; }, (r: any) => `${r.foundCodes} of ${r.searched} codes found · ${r.products} products imported`)}>Import these products</Btn>
+                  {codeResult?.products > 0 && <Btn onClick={() => nav('/bulk')}>Map them in bulk →</Btn>}
                   <span className="small muted">Imports the whole Shopify product (all sizes/colors) for each code found.</span>
                 </div>
                 {codeResult?.notFound?.length > 0 && <div className="small warn">Not found in Shopify ({codeResult.notFound.length}): {codeResult.notFound.slice(0, 40).join(', ')}{codeResult.notFound.length > 40 ? '…' : ''}</div>}
