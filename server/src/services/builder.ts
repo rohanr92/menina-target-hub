@@ -163,7 +163,8 @@ function tplVars(c: Ctx) {
 function titleVars(c: Ctx): Record<string, string> {
   const ov = (k: string) => { const v = (c.v?.overrides as any)?.[k] ?? (c.p.overrides as any)?.[k]; return v && v !== NONE ? String(Array.isArray(v) ? v[0] : v).split('|')[0].trim() : ''; };
   const chart = parseSizeChart(c.titles.sizeChart);
-  const brand = ov('brands.name') || c.p.vendor || '';
+  // the same brand the Brand field sends (on stage that is the test brand, e.g. Valor Fitness)
+  const brand = (c.stage && c.forceBrand ? c.forceBrand : '') || ov('brands.name') || c.p.vendor || '';
   const color = ov('child_variations.color') || c.color;
   // size typed / mapped in a Target size field wins over the Shopify option
   const fieldSize = ov('child_variations.size') || c.sizeKeys.map(ov).find(Boolean) || '';
