@@ -71,8 +71,8 @@ export interface SyncSettings {
 }
 
 export const defaultSync: SyncSettings = {
-  inventoryEnabled: false,
-  priceEnabled: false,
+  inventoryEnabled: true,
+  priceEnabled: true,
   inventoryIntervalMin: 30,
   ordersEnabled: false,
   ordersIntervalMin: 15,

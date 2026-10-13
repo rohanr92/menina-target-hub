@@ -60,17 +60,24 @@ export async function reservedBySku(): Promise<Map<string, number>> {
 export async function desiredQuantities(v: typeof schema.variants.$inferSelect): Promise<Record<string, number>> {
   const sync = await getSync();
   const shop = await getShopify();
-  const dcs = await db.select().from(schema.distributionCenters);
-  if (!dcs.length) throw new Error('No distribution centers loaded. Run "Pull setup data" on the Taxonomy page.');
-  const map = shop.locationMap ?? {};
+  let dcs = await db.select().from(schema.distributionCenters);
+  if (!dcs.length) {
+    // first stock push: load the seller's distribution centers from Target automatically
+    const { syncSetupData } = await import('./taxonomy.js');
+    await syncSetupData().catch((e: any) => { throw new Error(`Could not load your distribution centers from Target: ${e?.message ?? e}`); });
+    dcs = await db.select().from(schema.distributionCenters);
+    if (!dcs.length) throw new Error('Target returned no distribution centers for this seller. Ask Target to set one up on your account.');
+  }
+  const known = new Set(dcs.map((d) => d.id));
+  const map = Object.fromEntries(Object.entries(shop.locationMap ?? {}).filter(([, dc]) => dc && known.has(dc)));
   const byLoc = (v.inventoryByLoc ?? {}) as Record<string, number>;
   const out: Record<string, number> = {};
   if (Object.keys(map).length) {
     for (const [loc, dc] of Object.entries(map)) if (dc) out[dc] = (out[dc] ?? 0) + Math.max(0, byLoc[loc] ?? 0);
     for (const [loc, q] of Object.entries(byLoc)) if (!loc.startsWith('gid://shopify/Location/')) out[dcs[0].id] = (out[dcs[0].id] ?? 0) + Math.max(0, q);
-  } else {
-    out[dcs[0].id] = Math.max(0, v.inventory);
   }
+  // no location mapping (or this SKU has no stock rows at mapped locations): all Shopify stock goes to the first DC
+  if (!Object.keys(out).length) out[dcs[0].id] = Math.max(0, v.inventory ?? 0);
   // safety stock + open-order reservation are taken from the largest DC first
   let deduct = sync.safetyStock;
   if (sync.reserveOpenOrders && v.sku) deduct += (await reservedBySku()).get(v.sku) ?? 0;

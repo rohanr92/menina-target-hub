@@ -3,11 +3,11 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { and, desc, eq, ilike, inArray, isNotNull, or, sql } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { reconcileInventoryAndPrice, runJob } from '../jobs/scheduler.js';
-import { getActiveEnv, getShopify, getSync, getTargetCreds } from '../lib/settings.js';
+import { getActiveEnv, getSetting, getShopify, getSync, getTargetCreds, setSetting } from '../lib/settings.js';
 import { refreshVariantsFromShopify } from '../services/catalog.js';
 import * as O from '../services/orders.js';
 import * as R from '../services/reports.js';
-import { enqueue, enqueueMany, queueStats, targetVariantIds } from '../services/sync.js';
+import { desiredQuantities, enqueue, enqueueMany, queueStats, targetVariantIds } from '../services/sync.js';
 import { parseCsv } from '../services/taxonomy.js';
 import * as TP from '../services/testplan.js';
 import * as T from '../target/api.js';
@@ -56,10 +56,62 @@ export default async function (app: FastifyInstance) {
   app.get('/api/jobs', async () => db.select().from(schema.jobRuns).orderBy(desc(schema.jobRuns.startedAt)).limit(100));
 
   // ---------------- sync ----------------
-  app.get('/api/sync/status', async () => ({
-    stats: await queueStats(),
-    recent: await db.select().from(schema.syncTasks).orderBy(desc(schema.syncTasks.updatedAt)).limit(100),
-  }));
+  app.get('/api/sync/status', async () => {
+    const recent = await db.select({ t: schema.syncTasks, sku: schema.variants.sku }).from(schema.syncTasks)
+      .leftJoin(schema.variants, eq(schema.variants.id, schema.syncTasks.variantId)).orderBy(desc(schema.syncTasks.updatedAt)).limit(100);
+    return { stats: await queueStats(), recent: recent.map((r) => ({ ...r.t, sku: r.sku })) };
+  });
+
+  /** Stock per live SKU: Shopify quantity, what the hub will send per DC, what was last sent, last error. */
+  app.get('/api/sync/stock', async () => {
+    const sync = await getSync();
+    const shop = await getShopify();
+    const dcs = await db.select().from(schema.distributionCenters);
+    const vs = await db.select().from(schema.variants).where(isNotNull(schema.variants.targetProductId)).orderBy(schema.variants.sku).limit(2000);
+    const errs = vs.length ? await db.select().from(schema.syncTasks).where(and(eq(schema.syncTasks.kind, 'inventory'), inArray(schema.syncTasks.variantId, vs.map((v) => v.id)))).orderBy(desc(schema.syncTasks.updatedAt)) : [];
+    const lastTask = new Map<string, any>();
+    for (const t of errs) if (t.variantId && !lastTask.has(t.variantId)) lastTask.set(t.variantId, t);
+    let planError: string | null = null;
+    const rows: any[] = [];
+    for (const v of vs) {
+      let want: Record<string, number> | null = null;
+      if (dcs.length && !planError) { try { want = await desiredQuantities(v); } catch (e: any) { planError = e?.message ?? String(e); } }
+      const t = lastTask.get(v.id);
+      rows.push({
+        variantId: v.id, productId: v.productId, sku: v.sku, tcin: v.tcin, syncEnabled: v.syncEnabled,
+        shopify: v.inventory, byLoc: v.inventoryByLoc, want, sent: v.lastQtySent ?? {}, sentAt: v.lastQtySentAt,
+        task: t ? { status: t.status, error: t.lastError, result: t.result, at: t.updatedAt } : null,
+      });
+    }
+    return {
+      inventoryEnabled: sync.inventoryEnabled, priceEnabled: sync.priceEnabled, intervalMin: sync.inventoryIntervalMin, safetyStock: sync.safetyStock,
+      shopifyConnected: !!shop.accessToken, locationMap: shop.locationMap ?? {}, distributionCenters: dcs.map((d) => ({ id: d.id, name: d.name })),
+      planError, rows,
+    };
+  });
+
+  /** Turn automatic stock + price sync on/off. */
+  app.post('/api/sync/auto', async (req) => {
+    const { on } = (req.body ?? {}) as { on?: boolean };
+    const cur = await getSetting<any>('sync', {});
+    await setSetting('sync', { ...cur, inventoryEnabled: on !== false, priceEnabled: on !== false });
+    return { ok: true, on: on !== false };
+  });
+
+  /** Send stock now for some SKUs (or all live SKUs): refresh from Shopify first, then push every DC. */
+  app.post('/api/sync/stock/send', async (req) => {
+    const { variantIds } = (req.body ?? {}) as { variantIds?: string[] };
+    const conds = [isNotNull(schema.variants.targetProductId), eq(schema.variants.syncEnabled, true)];
+    if (Array.isArray(variantIds) && variantIds.length) conds.push(inArray(schema.variants.id, variantIds.map(String)));
+    const rows = await db.select({ id: schema.variants.id, sourceId: schema.variants.sourceId, inventory: schema.variants.inventory, price: schema.variants.price, compareAtPrice: schema.variants.compareAtPrice })
+      .from(schema.variants).where(and(...conds));
+    if (rows.some((r) => r.sourceId.startsWith('gid://'))) await refreshVariantsFromShopify(rows);
+    // make sure the DCs exist before the queue runs (loads them from Target on first use)
+    const dcs = await db.select().from(schema.distributionCenters);
+    if (!dcs.length) { const { syncSetupData } = await import('../services/taxonomy.js'); await syncSetupData(); }
+    await enqueueMany('inventory', rows.map((r) => r.id), { force: true });
+    return { queued: rows.length };
+  });
   app.post('/api/sync/run', async (req) => {
     const { kind = 'all', force } = (req.body ?? {}) as { kind?: 'inventory' | 'price' | 'all'; force?: boolean };
     const rows = await db.select({ id: schema.variants.id, sourceId: schema.variants.sourceId, inventory: schema.variants.inventory, price: schema.variants.price, compareAtPrice: schema.variants.compareAtPrice })
