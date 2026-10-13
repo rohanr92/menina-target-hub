@@ -2,6 +2,7 @@
 import type { FastifyInstance } from 'fastify';
 import { eq } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
+import { saveItemTypes } from '../services/taxonomy.js';
 import { allRows, autoMap, categorySetupStatus, startCategorySetup, buildRows, exportSheet, gridColumns, gridPage, gridTabs, importSheet, saveCells, type GridQuery } from '../services/grid.js';
 
 const bad = (msg: string, code = 400) => Object.assign(new Error(msg), { statusCode: code });
@@ -23,6 +24,15 @@ export default async function (app: FastifyInstance) {
     return startCategorySetup({ onlyIds: Array.isArray(b.onlyIds) ? b.onlyIds.map(String) : undefined, withValues: b.withValues, skipReport: !!b.skipReport });
   });
   app.get('/api/grid/setup-categories', async () => categorySetupStatus());
+
+  /** Add item types found by name in Target's taxonomy, then load their fields and dropdown values. */
+  app.post('/api/grid/add-categories', async (req) => {
+    const { items } = (req.body ?? {}) as { items: { id: string; name: string }[] };
+    const clean = (Array.isArray(items) ? items : []).map((x) => ({ id: String(x.id ?? '').trim(), name: String(x.name ?? '').trim() })).filter((x) => x.id && x.name);
+    if (!clean.length) throw bad('Pick at least one item type');
+    await saveItemTypes(clean);
+    return startCategorySetup({ onlyIds: clean.map((x) => x.id) });
+  });
   app.get('/api/grid/columns', async (req) => gridColumns((req.query as any).itemTypeId || null));
   app.get('/api/grid', async (req) => {
     const f = query(req.query);

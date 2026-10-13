@@ -53,7 +53,10 @@ export async function importAllowedItemTypes(id?: string) {
   if (!r) throw new Error('No completed ALLOWED_ITEM_TYPES report. Request one and wait until it is COMPLETE.');
   const { data, contentType } = await download(r.id);
   const types = await parseAllowedItemTypes(data, contentType);
-  if (!types.length) throw new Error('Could not find item types in the report. Upload the file manually on the Taxonomy page.');
+  if (!types.length) {
+    const sample = typeof data === 'string' ? data : Buffer.isBuffer(data) ? `(binary file, ${data.length} bytes, ${contentType})` : JSON.stringify(data);
+    throw new Error(`Could not find item types in the report. Start of the report: ${String(sample).slice(0, 300)}`);
+  }
   await saveItemTypes(types);
   return { count: types.length, types: types.slice(0, 50).map((t) => ({ id: t.id, name: t.name })) };
 }

@@ -242,9 +242,55 @@ function AutoMapModal({ selected, filter, viewCount, onClose, onDone }: { select
 
 
 // ---------------------------------------------------------------- categories (item types) from Target
+function AddCategories({ onClose, onStarted }: { onClose: () => void; onStarted: () => void }) {
+  const [name, setName] = useState('');
+  const [found, setFound] = useState<{ id: string; name: string }[] | null>(null);
+  const [pick, setPick] = useState<Record<string, string>>({});
+  const [manual, setManual] = useState({ id: '', name: '' });
+  const { busy, run } = useAction();
+  const search = () => run('find', async () => {
+    const r: any = await get(`/api/taxonomy/search?name=${encodeURIComponent(name.trim())}`);
+    const list: any[] = Array.isArray(r) ? r : r?.data ?? r?.items ?? r?.taxonomies ?? [];
+    setFound(list.map((x) => ({ id: String(x.id ?? x.taxonomy_id ?? ''), name: String(x.name ?? x.taxonomy_name ?? '') })).filter((x) => x.id && x.name));
+  });
+  const add = (items: { id: string; name: string }[]) => run('add', async () => { await post('/api/grid/add-categories', { items }); onStarted(); onClose(); }, `Adding ${items.length} item type(s) and loading their fields…`);
+  return (
+    <Modal title="Add your approved categories" onClose={onClose}>
+      <div className="stack">
+        <div className="small muted">Type a category name exactly like Target shows it (for example <strong>Flats and Slip Ons</strong>, <strong>Boots</strong>, <strong>Heels</strong>), search, tick it and click Add. Target Hub then loads that category's fields and dropdown values.</div>
+        <div className="row">
+          <input style={{ flex: 1 }} placeholder="Category name, e.g. Sandals" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && name.trim() && search()} />
+          <Btn kind="primary" busy={busy === 'find'} disabled={!name.trim()} onClick={search}>Search Target</Btn>
+        </div>
+        {found && (found.length === 0 ? <div className="small warn">Nothing found for "{name}". Try a shorter word (e.g. "Flats").</div> : (
+          <Card title={`Found ${found.length}`}>
+            {found.map((f) => (
+              <label key={f.id} className="list-row" style={{ cursor: 'pointer' }}>
+                <span><input type="checkbox" style={{ width: 16, minHeight: 0, marginRight: 8 }} checked={!!pick[f.id]} onChange={(e) => setPick((p) => { const n = { ...p }; if (e.target.checked) n[f.id] = f.name; else delete n[f.id]; return n; })} />{f.name}</span>
+                <code className="small">{f.id}</code>
+              </label>
+            ))}
+          </Card>
+        ))}
+        <details>
+          <summary className="small muted" style={{ cursor: 'pointer' }}>I know the item type ID</summary>
+          <div className="row" style={{ marginTop: 8 }}>
+            <input style={{ width: 160 }} placeholder="Item type ID" value={manual.id} onChange={(e) => setManual({ ...manual, id: e.target.value })} />
+            <input style={{ flex: 1 }} placeholder="Name (e.g. Flats and Slip Ons)" value={manual.name} onChange={(e) => setManual({ ...manual, name: e.target.value })} />
+            <Btn disabled={!manual.id.trim() || !manual.name.trim()} busy={busy === 'add'} onClick={() => add([{ id: manual.id.trim(), name: manual.name.trim() }])}>Add</Btn>
+          </div>
+        </details>
+        <div className="row between"><span className="small muted">{Object.keys(pick).length} selected</span>
+          <Btn kind="primary" busy={busy === 'add'} disabled={!Object.keys(pick).length} onClick={() => add(Object.entries(pick).map(([id, n]) => ({ id, name: n })))}>Add selected</Btn></div>
+      </div>
+    </Modal>
+  );
+}
+
 function CategorySetup({ types, onDone }: { types: any[]; onDone: () => void }) {
   const [st, setSt] = useState<any>(null);
-  const { run } = useAction();
+  const [addOpen, setAddOpen] = useState(false);
+  const { busy, run } = useAction();
   const poll = useRef<any>(null);
   const watch = () => {
     clearInterval(poll.current);
@@ -257,37 +303,58 @@ function CategorySetup({ types, onDone }: { types: any[]; onDone: () => void }) 
   useEffect(() => { get('/api/grid/setup-categories').then((s) => { setSt(s); if (s.running) watch(); }).catch(() => {}); return () => clearInterval(poll.current); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const start = (body: any) => run('setup', async () => { setSt(await post('/api/grid/setup-categories', body)); watch(); });
   const noFields = types.filter((t) => !t.attrs);
+  const modal = addOpen && <AddCategories onClose={() => setAddOpen(false)} onStarted={() => { setSt({ running: true, step: 'Starting…', done: 0, total: 0 }); watch(); }} />;
   if (st?.running) {
     return (
       <div className="setup-bar">
         <span className="spin" />
-        <div><strong>Loading your Target categories…</strong><div className="small">{st.step}{st.total ? ` · ${st.done}/${st.total} item types` : ''}</div>
+        <div style={{ flex: 1 }}><strong>Loading your Target categories…</strong><div className="small">{st.step}{st.total ? ` · ${st.done}/${st.total} item types` : ''}</div>
           {st.total > 0 && <div className="progress" style={{ marginTop: 6, width: 280 }}><div style={{ width: `${(st.done / st.total) * 100}%` }} /></div>}</div>
       </div>
     );
   }
+  const errorBox = st?.error && (
+    <div className="small bad" style={{ marginTop: 8 }}>
+      <strong>It didn't work:</strong> {st.error}
+      <div className="muted" style={{ marginTop: 4 }}>No problem: use <strong>Add categories by name</strong> instead (type "Flats and Slip Ons", "Boots"… and add them). You can also send this message to your developer.</div>
+    </div>
+  );
   if (!types.length) {
     return (
       <div className="setup-bar big">
-        <div>
+        <div style={{ flex: 1 }}>
           <strong>Step 1 · Load your Target categories (item types)</strong>
-          <div className="small">Target only lets you list in the item types approved for Menina Step. One click asks Target for that list (the ALLOWED_ITEM_TYPES report), then loads every field and dropdown value for each item type, in the order Target's guide gives. It can take a few minutes.</div>
-          {st?.error && <div className="small bad" style={{ marginTop: 6 }}>Last try failed: {st.error}</div>}
+          <div className="small">Your approved categories (Boots, Flats and Slip Ons, Heels, Sandals…) are already approved on Target. Target Hub just needs to download them once, with their fields and dropdown values. Click the blue button; it takes a few minutes.</div>
+          {errorBox}
         </div>
-        <Btn kind="primary" onClick={() => start({})}>Load my categories from Target</Btn>
+        <div className="stack" style={{ flex: 'none' }}>
+          <Btn kind="primary" busy={busy === 'setup'} onClick={() => start({})}>Load my categories from Target</Btn>
+          <Btn onClick={() => setAddOpen(true)}>Add categories by name</Btn>
+        </div>
+        {modal}
       </div>
     );
   }
   if (noFields.length) {
     return (
       <div className="setup-bar">
-        <div><strong>{noFields.length} of {types.length} item types have no fields loaded yet</strong><div className="small">{noFields.slice(0, 6).map((t) => t.name).join(', ')}{noFields.length > 6 ? '…' : ''}. Their products only show basic fields until the fields are loaded.</div>
-          {st?.error && <div className="small bad">Last try failed: {st.error}</div>}</div>
-        <Btn kind="primary" onClick={() => start({ onlyIds: noFields.map((t) => t.id) })}>Load their fields</Btn>
+        <div style={{ flex: 1 }}><strong>{noFields.length} of {types.length} item types have no fields loaded yet</strong><div className="small">{noFields.slice(0, 6).map((t) => t.name).join(', ')}{noFields.length > 6 ? '…' : ''}. Their products only show basic fields until the fields are loaded.</div>{errorBox}</div>
+        <Btn kind="primary" busy={busy === 'setup'} onClick={() => start({ onlyIds: noFields.map((t) => t.id) })}>Load their fields</Btn>
+        <Btn onClick={() => setAddOpen(true)}>Add category</Btn>
+        {modal}
       </div>
     );
   }
-  return null;
+  return (
+    <div className="row" style={{ justifyContent: 'flex-end', marginBottom: 6 }}>
+      <span className="small muted">{types.length} categories loaded · </span>
+      <button className="link-btn small" onClick={() => setAddOpen(true)}>add another category</button>
+      <span className="small muted">·</span>
+      <button className="link-btn small" onClick={() => start({ skipReport: true })}>reload fields</button>
+      {errorBox}
+      {modal}
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------- page
