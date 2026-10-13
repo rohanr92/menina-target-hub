@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { get, post } from '../lib/api';
 import { ago } from '../lib/format';
-import { Btn, Card, Loading, PageHead, Status, useAction, useLoad } from '../components/ui';
+import { Btn, Card, Field, Loading, Modal, PageHead, Status, useAction, useLoad } from '../components/ui';
 
 export default function Inventory() {
   const s = useLoad(() => get('/api/sync/status'));
@@ -60,6 +60,7 @@ function StockCard({ stock, sel, setSel, onlyProblems, setOnlyProblems, busy, ru
   const rowsAll: any[] = d.rows;
   const problem = (r: any) => r.task?.status === 'failed' || !r.sentAt || (r.want && Object.entries(r.want).some(([dc, q]) => (r.sent ?? {})[dc] !== q));
   const rows = onlyProblems ? rowsAll.filter(problem) : rowsAll;
+  const [priceFor, setPriceFor] = useState<any>(null);
   const toggle = (id: string) => { const n = new Set(sel); n.has(id) ? n.delete(id) : n.add(id); setSel(n); };
   const send = (ids?: string[]) => run('send', () => post('/api/sync/stock/send', { variantIds: ids }), (r: any) => `Sending stock for ${r.queued} SKU(s). Refresh in a few seconds.`).then(() => setTimeout(reload, 4000));
   return (
@@ -84,10 +85,10 @@ function StockCard({ stock, sel, setSel, onlyProblems, setOnlyProblems, busy, ru
           <th style={{ width: 28 }}><input type="checkbox" checked={rows.length > 0 && rows.every((r) => sel.has(r.variantId))} onChange={(e) => setSel(e.target.checked ? new Set(rows.map((r) => r.variantId)) : new Set())} /></th>
           <th>SKU</th><th>TCIN</th><th className="num">Shopify</th>
           {dcs.map((x) => <th key={x.id} className="num">{x.name}<div className="muted small">send / on Target</div></th>)}
-          <th>Status</th><th>Last sent</th>
+          <th>Status</th><th>Last sent</th><th>Price on Target</th>
         </tr></thead>
         <tbody>
-          {rows.length === 0 && <tr><td colSpan={6 + dcs.length} className="empty">{rowsAll.length ? 'Everything is sent.' : 'No items on Target yet. Send products first.'}</td></tr>}
+          {rows.length === 0 && <tr><td colSpan={7 + dcs.length} className="empty">{rowsAll.length ? 'Everything is sent.' : 'No items on Target yet. Send products first.'}</td></tr>}
           {rows.map((r) => (
             <tr key={r.variantId}>
               <td><input type="checkbox" checked={sel.has(r.variantId)} onChange={() => toggle(r.variantId)} /></td>
@@ -106,10 +107,36 @@ function StockCard({ stock, sel, setSel, onlyProblems, setOnlyProblems, busy, ru
                   : r.sentAt ? 'sent' : <span className="bad">never sent</span>}
               </td>
               <td className="muted small">{r.sentAt ? ago(r.sentAt) : ''}</td>
+              <td className="small" style={{ whiteSpace: 'nowrap' }}>
+                {r.priceSent ? <>list {r.priceSent.list_price}{r.priceSent.offer_price != null && <> · offer {r.priceSent.offer_price}</>}{r.priceSent.map_price != null && <> · MAP {r.priceSent.map_price}</>}</> : <span className="muted">not sent</span>}
+                {r.priceOverride && <span className="muted"> (fixed)</span>}{' '}
+                <button className="btn sm" onClick={() => setPriceFor(r)}>Set price</button>
+              </td>
             </tr>
           ))}
         </tbody>
       </table></div>
+      {priceFor && <PriceModal row={priceFor} onClose={() => setPriceFor(null)} onSaved={() => { setPriceFor(null); setTimeout(reload, 4000); }} />}
     </Card>
+  );
+}
+
+function PriceModal({ row, onClose, onSaved }: { row: any; onClose: () => void; onSaved: () => void }) {
+  const start = row.priceOverride ?? row.priceSent ?? {};
+  const [f, setF] = useState<any>({ list_price: start.list_price ?? row.compareAtPrice ?? row.shopifyPrice ?? '', offer_price: start.offer_price ?? '', map_price: start.map_price ?? '' });
+  const { busy, run } = useAction();
+  return (
+    <Modal title={`Target price · ${row.sku}`} onClose={onClose}>
+      <div className="muted small" style={{ marginBottom: 10 }}>Shopify price {row.shopifyPrice ?? '–'}{row.compareAtPrice ? `, compare-at ${row.compareAtPrice}` : ''}. The price you set here is sent now and kept for this SKU (Shopify price changes won't overwrite it) until you click "Use Shopify price again".</div>
+      <div className="row" style={{ gap: 10 }}>
+        <div style={{ width: 140 }}><Field label="List price (regular)"><input type="number" step="0.01" value={f.list_price} onChange={(e) => setF({ ...f, list_price: e.target.value })} /></Field></div>
+        <div style={{ width: 140 }}><Field label="Offer price (sale)"><input type="number" step="0.01" value={f.offer_price} placeholder="optional" onChange={(e) => setF({ ...f, offer_price: e.target.value })} /></Field></div>
+        <div style={{ width: 140 }}><Field label="MAP price"><input type="number" step="0.01" value={f.map_price} placeholder="optional" onChange={(e) => setF({ ...f, map_price: e.target.value })} /></Field></div>
+      </div>
+      <div className="row" style={{ gap: 8, marginTop: 12 }}>
+        <Btn kind="primary" busy={busy === 'save'} onClick={() => run('save', () => post(`/api/variants/${row.variantId}/set-price`, f), 'Price saved and sent to Target').then((r) => r && onSaved())}>Save &amp; send to Target</Btn>
+        {row.priceOverride && <Btn kind="ghost" busy={busy === 'clear'} onClick={() => run('clear', () => post(`/api/variants/${row.variantId}/set-price`, { clear: true }), 'Back to Shopify price').then((r) => r && onSaved())}>Use Shopify price again</Btn>}
+      </div>
+    </Modal>
   );
 }

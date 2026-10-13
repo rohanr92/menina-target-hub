@@ -79,6 +79,8 @@ export default async function (app: FastifyInstance) {
       rows.push({
         variantId: v.id, productId: v.productId, sku: v.sku, tcin: v.tcin, syncEnabled: v.syncEnabled,
         shopify: v.inventory, byLoc: v.inventoryByLoc, want, sent: v.lastQtySent ?? {}, sentAt: v.lastQtySentAt,
+        shopifyPrice: v.price, compareAtPrice: v.compareAtPrice, priceSent: v.lastPriceSent ?? null, priceSentAt: v.lastPriceSentAt,
+        priceOverride: (v.overrides as any)?.list_price ? { list_price: (v.overrides as any).list_price, offer_price: (v.overrides as any).offer_price ?? null, map_price: (v.overrides as any).map_price ?? null } : null,
         task: t ? { status: t.status, error: t.lastError, result: t.result, at: t.updatedAt } : null,
       });
     }
@@ -87,6 +89,27 @@ export default async function (app: FastifyInstance) {
       shopifyConnected: !!shop.accessToken, locationMap: shop.locationMap ?? {}, distributionCenters: dcs.map((d) => ({ id: d.id, name: d.name })),
       planError, rows,
     };
+  });
+
+  /** Fixed Target price for one SKU (list / offer / MAP). Sent right away; Shopify price rules are skipped for this SKU until cleared. */
+  app.post('/api/variants/:id/set-price', async (req) => {
+    const id = (req.params as any).id;
+    const b = (req.body ?? {}) as { list_price?: any; offer_price?: any; map_price?: any; clear?: boolean };
+    const v = await db.query.variants.findFirst({ where: eq(schema.variants.id, id) });
+    if (!v) throw bad('SKU not found', 404);
+    const ov: Record<string, any> = { ...((v.overrides as any) ?? {}) };
+    delete ov.list_price; delete ov.offer_price; delete ov.map_price;
+    if (!b.clear) {
+      const num = (x: any) => (x === '' || x == null ? null : Number(x));
+      const list = num(b.list_price), offer = num(b.offer_price), map = num(b.map_price);
+      if (!list || !(list > 0)) throw bad('List price is required and must be more than 0');
+      if (offer != null && !(offer > 0 && offer <= list)) throw bad('Offer price must be more than 0 and not higher than the list price');
+      if (map != null && !(map > 0 && map <= list)) throw bad('MAP price must be more than 0 and not higher than the list price');
+      ov.list_price = list; if (offer != null) ov.offer_price = offer; if (map != null) ov.map_price = map;
+    }
+    await db.update(schema.variants).set({ overrides: ov }).where(eq(schema.variants.id, id));
+    if (v.targetProductId) await enqueue('price', id, { force: true });
+    return { ok: true, queued: !!v.targetProductId };
   });
 
   /** Turn automatic stock + price sync on/off. */
