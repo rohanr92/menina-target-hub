@@ -1,7 +1,7 @@
 // Typed wrappers for every Target Plus endpoint used by the hub.
 // Endpoint shapes follow plus.target.com/docs/spec (seller, orders, taxonomy).
 import { getActiveEnv, getTargetCreds, TargetEnvName } from '../lib/settings.js';
-import { getAllPages, rawRequest, targetRequest } from './client.js';
+import { getAllPages, lastFirstPage, rawRequest, targetRequest } from './client.js';
 
 async function sellerId(env?: TargetEnvName) {
   const creds = await getTargetCreds(env ?? (await getActiveEnv()));
@@ -39,12 +39,22 @@ export async function downloadReport(downloadUrl: string) {
 
 // ---------------- Taxonomy ----------------
 export async function getAssignments(taxonomyId: string) {
-  return getAllPages('taxonomy', '/assignments', {
-    taxonomy_id: taxonomyId, attribute_group: 'SELLING,CORE,TAX,LOGISTICS', target: 'EXTERNAL',
-  }, { perPage: 1000, source: 'taxonomy' });
+  // the guide's call first; if Target answers with an empty list, try the same call without the group filter
+  const tries: Record<string, string>[] = [
+    { taxonomy_id: taxonomyId, attribute_group: 'SELLING,CORE,TAX,LOGISTICS', target: 'EXTERNAL' },
+    { taxonomy_id: taxonomyId, target: 'EXTERNAL' },
+    { taxonomy_id: taxonomyId },
+  ];
+  let sample = '';
+  for (const q of tries) {
+    const list = await getAllPages('taxonomy', '/assignments', q, { perPage: 100, source: 'taxonomy' });
+    if (list.length) return list;
+    sample = lastFirstPage;
+  }
+  throw new Error(`Target returned no fields for item type ${taxonomyId}. Target answered: ${sample || '(empty)'}`);
 }
 export async function getAttributeValues(taxonomyId: string, attributeId: string) {
-  return getAllPages('taxonomy', '/attribute_values', { taxonomy_id: taxonomyId, attribute_id: attributeId, target: 'EXTERNAL' }, { perPage: 1000, source: 'taxonomy-values' });
+  return getAllPages('taxonomy', '/attribute_values', { taxonomy_id: taxonomyId, attribute_id: attributeId, target: 'EXTERNAL' }, { perPage: 100, source: 'taxonomy-values' });
 }
 export async function getTaxonomy(id: string) {
   return (await targetRequest('taxonomy', 'GET', `/taxonomies/${encodeURIComponent(id)}`, { source: 'taxonomy' })).data;

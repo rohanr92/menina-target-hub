@@ -31,6 +31,14 @@ export default async function (app: FastifyInstance) {
     const clean = (Array.isArray(items) ? items : []).map((x) => ({ id: String(x.id ?? '').trim(), name: String(x.name ?? '').trim() })).filter((x) => x.id && x.name);
     if (!clean.length) throw bad('Pick at least one item type');
     await saveItemTypes(clean);
+    // same category added before under another id (typed by hand / from a file): move its products to the real id, drop the duplicate
+    const all = await db.select().from(schema.itemTypes);
+    for (const c of clean) {
+      for (const dup of all.filter((t) => t.id !== c.id && t.name.trim().toLowerCase() === c.name.toLowerCase())) {
+        await db.update(schema.products).set({ itemTypeId: c.id }).where(eq(schema.products.itemTypeId, dup.id));
+        await db.delete(schema.itemTypes).where(eq(schema.itemTypes.id, dup.id));
+      }
+    }
     return startCategorySetup({ onlyIds: clean.map((x) => x.id) });
   });
   app.get('/api/grid/columns', async (req) => gridColumns((req.query as any).itemTypeId || null));

@@ -89,20 +89,21 @@ export async function syncAttributes(itemTypeId: string) {
   const assignments = await T.getAssignments(itemTypeId);
   const seen = new Set<string>();
   for (const a of assignments) {
-    const attr = a.attribute ?? {};
-    const attributeId = String(a.attribute_id ?? attr.id);
-    if (!attributeId || seen.has(attributeId)) continue;
+    // Target nests the attribute ({ attribute_id, required, attribute: {...} }); accept a flat shape too
+    const attr = a.attribute ?? a;
+    const attributeId = String(a.attribute_id ?? attr.id ?? attr.attribute_id ?? '');
+    if (!attributeId || attributeId === 'undefined' || seen.has(attributeId)) continue;
     seen.add(attributeId);
     const row = {
       itemTypeId,
       attributeId,
-      taxonomyId: String(a.taxonomy_id ?? itemTypeId),
-      name: attr.name ?? attributeId,
-      mappedProperty: attr.mapped_property || null,
-      type: String(attr.type ?? 'TEXT').toUpperCase(),
-      group: String(attr.attribute_group ?? 'SELLING').toUpperCase(),
-      required: !!a.required,
-      maxSelections: Number(a.max_selections ?? 1) || 1,
+      taxonomyId: String(a.taxonomy_id ?? attr.taxonomy_id ?? itemTypeId),
+      name: attr.name ?? attr.attribute_name ?? attributeId,
+      mappedProperty: attr.mapped_property || a.mapped_property || null,
+      type: String(attr.type ?? attr.attribute_type ?? a.type ?? 'TEXT').toUpperCase(),
+      group: String(attr.attribute_group ?? a.attribute_group ?? attr.group ?? 'SELLING').toUpperCase(),
+      required: !!(a.required ?? attr.required),
+      maxSelections: Number(a.max_selections ?? attr.max_selections ?? 1) || 1,
       description: attr.description ?? null,
       raw: a,
     };
@@ -127,7 +128,7 @@ export async function syncValues(itemTypeId: string, onlyMissing = true, onProgr
     const values = await T.getAttributeValues(a.taxonomyId, a.attributeId);
     await db.delete(schema.attributeValues).where(eq(schema.attributeValues.attrId, a.id));
     const rows = values
-      .map((v: any) => ({ attrId: a.id, valueId: String(v.id ?? v.value_id ?? v.name), name: String(v.name ?? v.value ?? '') }))
+      .map((v: any) => ({ attrId: a.id, valueId: String(v.id ?? v.value_id ?? v.name ?? v.value), name: String(v.name ?? v.value ?? v.display_name ?? v.value_name ?? '') }))
       .filter((v: any) => v.name);
     const unique = [...new Map(rows.map((r: any) => [r.valueId, r])).values()];
     for (let i = 0; i < unique.length; i += 500) await db.insert(schema.attributeValues).values(unique.slice(i, i + 500)).onConflictDoNothing();

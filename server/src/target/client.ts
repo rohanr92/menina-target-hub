@@ -235,6 +235,9 @@ function errorMessage(status: number, data: any): string {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const backoff = (n: number) => Math.min(30_000, 1000 * 2 ** (n - 1)) + Math.random() * 300;
 
+/** First page body of the last getAllPages call (shown in errors when Target returns an empty or unexpected list). */
+export let lastFirstPage = '';
+
 /** Fetch every page of a page/per_page paginated list. */
 export async function getAllPages<T = any>(api: Api, path: string, query: Record<string, any> = {}, opts: RequestOpts & { perPage?: number; maxPages?: number } = {}): Promise<T[]> {
   const perPage = opts.perPage ?? 100;
@@ -242,7 +245,9 @@ export async function getAllPages<T = any>(api: Api, path: string, query: Record
   let firstKey = '';
   for (let page = 1; page <= (opts.maxPages ?? 200); page++) {
     const r = await targetRequest<T[]>(api, 'GET', path, { ...opts, query: { ...query, page, per_page: perPage } });
-    const items = Array.isArray(r.data) ? r.data : ((r.data as any)?.data ?? []);
+    const d: any = r.data;
+    const items: any[] = Array.isArray(d) ? d : (['data', 'items', 'results', 'assignments', 'attribute_values', 'values', 'taxonomies'].map((k) => d?.[k]).find(Array.isArray) ?? []);
+    if (page === 1) lastFirstPage = typeof d === 'string' ? d.slice(0, 400) : JSON.stringify(d ?? null).slice(0, 400);
     if (!items.length) break;
     // guard against an API that ignores "page" and keeps returning the same page
     const key = JSON.stringify(items[0]).slice(0, 200);
