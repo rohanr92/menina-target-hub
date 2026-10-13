@@ -1,16 +1,21 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { get } from '../lib/api';
-import { Card, ErrorBox, Loading, PageHead, Status, useLoad } from '../components/ui';
+import { Link, useNavigate } from 'react-router-dom';
+import { get, post } from '../lib/api';
+import { Btn, Card, ErrorBox, Loading, PageHead, Status, useAction, useLoad } from '../components/ui';
 
 export default function ListingErrors() {
   const [severity, setSeverity] = useState('');
   const [listing, setListing] = useState('');
   const r = useLoad(() => get(`/api/listing-errors?severity=${severity}&listing_status=${listing}`), [severity, listing]);
   const rows: any[] = r.data ?? [];
+  const { busy, run } = useAction();
+  const nav = useNavigate();
   return (
     <div className="page">
-      <PageHead title="Listing errors" sub="Items with validation or listing errors on Target (product_catalog_errors). CRITICAL errors block the item from listing; fix the data and send an update." />
+      <PageHead title="Listing errors" sub="Items with validation or listing errors on Target (product_catalog_errors). CRITICAL errors block the item from listing; fix the data and send an update.">
+        <Btn kind="primary" busy={busy === 'rep'} onClick={() => run('rep', () => post('/api/reports/quick', { preset: 'item_errors' }), 'Item errors report requested').then(() => nav('/reports'))}>Pull item errors report</Btn>
+        <Btn kind="ghost" onClick={() => setListing('REJECTED')}>Show rejected only</Btn>
+      </PageHead>
       <div className="row" style={{ marginBottom: 12 }}>
         <select style={{ width: 180 }} value={severity} onChange={(e) => setSeverity(e.target.value)}><option value="">Any severity</option><option>CRITICAL</option><option>NON_CRITICAL</option><option>WARNING</option></select>
         <select style={{ width: 180 }} value={listing} onChange={(e) => setListing(e.target.value)}><option value="">Any listing status</option><option>REJECTED</option><option>PENDING</option><option>APPROVED</option></select>

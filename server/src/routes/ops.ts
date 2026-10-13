@@ -8,7 +8,6 @@ import { refreshVariantsFromShopify } from '../services/catalog.js';
 import * as O from '../services/orders.js';
 import * as R from '../services/reports.js';
 import { desiredQuantities, enqueue, enqueueMany, queueStats, targetVariantIds } from '../services/sync.js';
-import { parseCsv } from '../services/taxonomy.js';
 import * as TP from '../services/testplan.js';
 import * as T from '../target/api.js';
 import { targetRequest } from '../target/client.js';
@@ -201,12 +200,31 @@ export default async function (app: FastifyInstance) {
     return typeof data === 'string' || Buffer.isBuffer(data) ? data : JSON.stringify(data, null, 2);
   });
   app.get('/api/reports/:id/preview', async (req) => {
-    const { data } = await R.download((req.params as any).id);
-    let rows: any[] = [];
-    if (Array.isArray(data)) rows = data;
-    else if (typeof data === 'string') rows = /^\s*[\[{]/.test(data) ? [].concat(JSON.parse(data)) : parseCsv(data);
-    else if (data && typeof data === 'object') rows = Array.isArray((data as any).data) ? (data as any).data : [data];
-    return { total: rows.length, rows: rows.slice(0, 300) };
+    const t = await R.reportTable((req.params as any).id, { q: (req.query as any).q || undefined, limit: 300 });
+    return { total: t.total, rows: t.rows };
+  });
+  /** Full report as a table to read inside the hub (Excel, CSV and JSON). */
+  app.get('/api/reports/:id/view', async (req) => {
+    const { q } = req.query as any;
+    return R.reportTable((req.params as any).id, { q: q || undefined, limit: 2000 });
+  });
+  /** One-click report presets (Test plan › Reporting). */
+  app.post('/api/reports/quick', async (req) => {
+    const { preset } = (req.body ?? {}) as { preset: string };
+    const now = new Date(); const ago30 = new Date(Date.now() - 30 * 864e5);
+    const presets: Record<string, any> = {
+      item_errors: { type: 'ITEM_ERRORS', format: 'JSON' },
+      item_errors_v2: { type: 'ITEM_ERRORS_V2', format: 'JSON' },
+      inventory_published: { type: 'INVENTORY', format: 'CSV', parameters: { is_published: true } },
+      inventory_unpublished: { type: 'INVENTORY', format: 'CSV', parameters: { is_published: false } },
+      orders_30d: { type: 'ORDERS', format: 'JSON', start_date: ago30.toISOString(), end_date: now.toISOString() },
+      allowed_item_types: { type: 'ALLOWED_ITEM_TYPES', format: 'EXCEL' },
+      logistic_errors: { type: 'PRODUCT_LOGISTIC_ERRORS', format: 'JSON' },
+      inconsistencies: { type: 'ITEM_INCONSISTENCIES', format: 'JSON' },
+    };
+    const body = presets[preset];
+    if (!body) throw bad('Unknown report');
+    return R.requestReport(body);
   });
 
   // ---------------- returns ----------------
