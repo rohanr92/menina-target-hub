@@ -256,3 +256,6 @@ table.grid td select { padding-right: 24px; }
 .img-strip img.on { border-color: var(--accent); }
 table.tight td, table.tight th { padding: 8px 12px; }
 .sku-detail .kv { align-content: start; }
+.setup-bar { display: flex; gap: 14px; align-items: center; justify-content: space-between; background: var(--warn-soft); border: 1px solid #f6d7a7; border-radius: 12px; padding: 12px 16px; margin-bottom: 14px; }
+.setup-bar.big { background: var(--accent-soft); border-color: #d9e0ff; padding: 18px 20px; }
+.setup-bar .btn { flex: none; }

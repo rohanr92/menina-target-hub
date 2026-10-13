@@ -2,7 +2,7 @@
 import type { FastifyInstance } from 'fastify';
 import { eq } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
-import { allRows, autoMap, buildRows, exportSheet, gridColumns, gridPage, gridTabs, importSheet, saveCells, type GridQuery } from '../services/grid.js';
+import { allRows, autoMap, categorySetupStatus, startCategorySetup, buildRows, exportSheet, gridColumns, gridPage, gridTabs, importSheet, saveCells, type GridQuery } from '../services/grid.js';
 
 const bad = (msg: string, code = 400) => Object.assign(new Error(msg), { statusCode: code });
 const list = (x: any) => (Array.isArray(x) ? x : typeof x === 'string' && x ? x.split(',') : []).map((s: string) => s.trim()).filter(Boolean);
@@ -16,6 +16,13 @@ function query(q: any): GridQuery {
 
 export default async function (app: FastifyInstance) {
   app.get('/api/grid/tabs', async () => gridTabs());
+
+  /** One click: allowed item types report -> item types -> fields -> dropdown values. Runs in the background. */
+  app.post('/api/grid/setup-categories', async (req) => {
+    const b = (req.body ?? {}) as { onlyIds?: string[]; withValues?: boolean; skipReport?: boolean };
+    return startCategorySetup({ onlyIds: Array.isArray(b.onlyIds) ? b.onlyIds.map(String) : undefined, withValues: b.withValues, skipReport: !!b.skipReport });
+  });
+  app.get('/api/grid/setup-categories', async () => categorySetupStatus());
   app.get('/api/grid/columns', async (req) => gridColumns((req.query as any).itemTypeId || null));
   app.get('/api/grid', async (req) => {
     const f = query(req.query);

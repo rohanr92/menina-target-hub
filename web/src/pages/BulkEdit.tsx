@@ -240,6 +240,56 @@ function AutoMapModal({ selected, filter, viewCount, onClose, onDone }: { select
   );
 }
 
+
+// ---------------------------------------------------------------- categories (item types) from Target
+function CategorySetup({ types, onDone }: { types: any[]; onDone: () => void }) {
+  const [st, setSt] = useState<any>(null);
+  const { run } = useAction();
+  const poll = useRef<any>(null);
+  const watch = () => {
+    clearInterval(poll.current);
+    poll.current = setInterval(async () => {
+      const s = await get('/api/grid/setup-categories').catch(() => null);
+      setSt(s);
+      if (s && !s.running) { clearInterval(poll.current); onDone(); }
+    }, 2500);
+  };
+  useEffect(() => { get('/api/grid/setup-categories').then((s) => { setSt(s); if (s.running) watch(); }).catch(() => {}); return () => clearInterval(poll.current); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const start = (body: any) => run('setup', async () => { setSt(await post('/api/grid/setup-categories', body)); watch(); });
+  const noFields = types.filter((t) => !t.attrs);
+  if (st?.running) {
+    return (
+      <div className="setup-bar">
+        <span className="spin" />
+        <div><strong>Loading your Target categories…</strong><div className="small">{st.step}{st.total ? ` · ${st.done}/${st.total} item types` : ''}</div>
+          {st.total > 0 && <div className="progress" style={{ marginTop: 6, width: 280 }}><div style={{ width: `${(st.done / st.total) * 100}%` }} /></div>}</div>
+      </div>
+    );
+  }
+  if (!types.length) {
+    return (
+      <div className="setup-bar big">
+        <div>
+          <strong>Step 1 · Load your Target categories (item types)</strong>
+          <div className="small">Target only lets you list in the item types approved for Menina Step. One click asks Target for that list (the ALLOWED_ITEM_TYPES report), then loads every field and dropdown value for each item type, in the order Target's guide gives. It can take a few minutes.</div>
+          {st?.error && <div className="small bad" style={{ marginTop: 6 }}>Last try failed: {st.error}</div>}
+        </div>
+        <Btn kind="primary" onClick={() => start({})}>Load my categories from Target</Btn>
+      </div>
+    );
+  }
+  if (noFields.length) {
+    return (
+      <div className="setup-bar">
+        <div><strong>{noFields.length} of {types.length} item types have no fields loaded yet</strong><div className="small">{noFields.slice(0, 6).map((t) => t.name).join(', ')}{noFields.length > 6 ? '…' : ''}. Their products only show basic fields until the fields are loaded.</div>
+          {st?.error && <div className="small bad">Last try failed: {st.error}</div>}</div>
+        <Btn kind="primary" onClick={() => start({ onlyIds: noFields.map((t) => t.id) })}>Load their fields</Btn>
+      </div>
+    );
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------- page
 export default function BulkEdit() {
   const [params, setParams] = useSearchParams();
@@ -289,7 +339,7 @@ export default function BulkEdit() {
   const sections = cols.reduce((acc: { s: string; n: number }[], c) => { const last = acc[acc.length - 1]; if (last?.s === c.section) last.n++; else acc.push({ s: c.section, n: 1 }); return acc; }, []);
   const selRows = rows.filter((r) => sel.has(r.variantId));
 
-  const reload = () => { grid.reload(); tabs.reload(); };
+  const reload = () => { grid.reload(); tabs.reload(); types.reload(); };
   const saveCell = (r: Row, key: string, value: string) => run('cell', async () => { await post('/api/grid/cells', { cells: [{ variantId: r.variantId, key, value }] }); reload(); });
   const saveBulk = (key: string, value: string) => {
     if (!sel.size) return;
@@ -328,6 +378,7 @@ export default function BulkEdit() {
         <input ref={fileRef} type="file" accept=".xlsx,.csv" style={{ display: 'none' }} onChange={(e) => e.target.files?.[0] && onUpload(e.target.files[0])} />
       </PageHead>
 
+      <CategorySetup types={types.data ?? []} onDone={() => { types.reload(); reload(); }} />
       <div className="tabs">
         {productFilter && <button className={itemTypeId === 'all' ? 'on' : ''} onClick={() => { setItemTypeId('all'); setPage(1); }}>Chosen products</button>}
         {tabList.map((t) => (
@@ -395,7 +446,7 @@ export default function BulkEdit() {
                   <td colSpan={3} />
                   <td>
                     <select value="" onChange={(e) => e.target.value && saveBulk('__itemType', e.target.value)}>
-                      <option value="">Set item type…</option>
+                      <option value="">{(types.data ?? []).length ? 'Set item type…' : 'Load categories first ↑'}</option>
                       {(types.data ?? []).map((t: any) => <option key={t.id} value={t.id}>{t.name}</option>)}
                     </select>
                   </td>
@@ -428,7 +479,7 @@ export default function BulkEdit() {
                     <td className="small mono">{r.tcin ?? '—'}</td>
                     <td>
                       <select className={!r.itemTypeId ? 'cell missing' : 'cell'} value={r.itemTypeId ?? ''} onChange={(e) => saveCell(r, '__itemType', e.target.value)}>
-                        <option value="">— choose —</option>
+                        <option value="">{(types.data ?? []).length ? '— choose —' : 'Load categories first ↑'}</option>
                         {(types.data ?? []).map((t: any) => <option key={t.id} value={t.id}>{t.name}</option>)}
                       </select>
                     </td>

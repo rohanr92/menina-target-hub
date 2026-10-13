@@ -7,7 +7,8 @@ import { db, schema } from '../db/index.js';
 import type { Attribute, Product, Variant } from '../db/schema.js';
 import { NONE, attrKey, buildProduct, detectOptions, detectTheme, loadTaxo, matchAllowed } from './builder.js';
 import { descriptionWithoutList, normalize, stripHtml } from './text.js';
-import { parseCsv } from './taxonomy.js';
+import { parseCsv, syncAttributes, syncValues } from './taxonomy.js';
+import { importAllowedItemTypes, refreshReport, requestReport } from './reports.js';
 
 export type Section = 'listing' | 'variation' | 'required' | 'images' | 'bullets' | 'optional';
 export interface GridColumn {
@@ -114,6 +115,9 @@ function basicValues(p: Product, v: Variant, theme: string): Record<string, stri
   imgs.slice(1, 9).forEach((u, i) => { out[`digital_assets.images.alternate_image_urls[${i + 1}]`] = u; });
   (p.bullets as string[]).forEach((b, i) => { out[`descriptions.bullets[${i + 1}]`] = b; });
   if (v.weightLb) out['package_dimensions.measurements.weight'] = v.weightLb.toFixed(2);
+  out['compliance.import_designation'] = 'imported';
+  out['compliance.is_proposition_65'] = 'No';
+  out['compliance.tax_category.tax_code'] = /shoe|boot|sandal|sneaker|loafer|flat|heel|slipper|clog|mule|pump|oxford|mary jane/i.test(`${p.title} ${p.productType ?? ''}`) ? 'Shoes' : 'General Clothing';
   return out;
 }
 
@@ -684,4 +688,54 @@ export async function importSheet(buf: Buffer, filename: string) {
     rows: dataRows.length, skusMatched: new Set(vs.map((v) => v.sku)).size, skusChanged: touched.size, cellsChanged: saved.cells + typeChanges.length,
     parentsUpdated: parentProductChanges.size, unknown, warnings: warnings.slice(0, 200), moreWarnings: Math.max(0, warnings.length - 200),
   };
+}
+
+// ---------------------------------------------------------------- one-click category setup
+// Target guide order: ALLOWED_ITEM_TYPES report -> item types -> assignments (fields) -> attribute values (dropdowns)
+export interface SetupState { running: boolean; step: string; done: number; total: number; error: string | null; finishedAt: string | null; itemTypes: number }
+let setupState: SetupState = { running: false, step: '', done: 0, total: 0, error: null, finishedAt: null, itemTypes: 0 };
+export const categorySetupStatus = () => setupState;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export function startCategorySetup(opts: { onlyIds?: string[]; withValues?: boolean; skipReport?: boolean } = {}) {
+  if (setupState.running) return setupState;
+  setupState = { running: true, step: 'Starting…', done: 0, total: 0, error: null, finishedAt: null, itemTypes: 0 };
+  (async () => {
+    try {
+      if (!opts.onlyIds?.length && !opts.skipReport) {
+        setupState.step = 'Asking Target for your allowed item types (ALLOWED_ITEM_TYPES report)';
+        const r = await requestReport({ type: 'ALLOWED_ITEM_TYPES', format: 'JSON' });
+        let status = r.status;
+        for (let i = 0; i < 60 && status !== 'COMPLETE'; i++) {
+          if (['CANCELED', 'CANCELLED', 'ERROR', 'FAILED'].includes(String(status).toUpperCase())) throw new Error(`Target report ended with status ${status}`);
+          setupState.step = `Waiting for Target to build the report (${status?.toLowerCase() ?? 'pending'})…`;
+          await sleep(i < 5 ? 3000 : 6000);
+          status = (await refreshReport(r.id)).status;
+        }
+        if (status !== 'COMPLETE') throw new Error('Target is still building the report. Try again in a few minutes (Taxonomy page › Check status also works).');
+        setupState.step = 'Downloading the report and saving item types';
+        await importAllowedItemTypes(r.id);
+      }
+      let types = await db.select().from(schema.itemTypes).orderBy(asc(schema.itemTypes.name));
+      if (opts.onlyIds?.length) types = types.filter((t) => opts.onlyIds!.includes(t.id));
+      setupState.itemTypes = types.length;
+      setupState.total = types.length;
+      for (const t of types) {
+        setupState.step = `Loading Target fields for ${t.name}`;
+        await syncAttributes(t.id);
+        if (opts.withValues !== false) {
+          setupState.step = `Loading dropdown values for ${t.name}`;
+          await syncValues(t.id, true);
+        }
+        setupState.done++;
+      }
+      setupState.step = 'Done';
+    } catch (e: any) {
+      setupState.error = e?.message ?? String(e);
+    } finally {
+      setupState.running = false;
+      setupState.finishedAt = new Date().toISOString();
+    }
+  })();
+  return setupState;
 }
