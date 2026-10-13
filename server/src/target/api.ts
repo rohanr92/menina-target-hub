@@ -49,8 +49,32 @@ export async function getAttributeValues(taxonomyId: string, attributeId: string
 export async function getTaxonomy(id: string) {
   return (await targetRequest('taxonomy', 'GET', `/taxonomies/${encodeURIComponent(id)}`, { source: 'taxonomy' })).data;
 }
+/**
+ * Find item types by name. The kickoff doc uses /taxonomies, the guide /taxonomy; the "name" filter may be ignored.
+ * Tries both paths, then falls back to reading every ITEM_TYPE page once (cached) and filtering here.
+ */
+let itemTypeCache: { at: number; list: any[] } | null = null;
+const listOf = (d: any): any[] => (Array.isArray(d) ? d : d?.data ?? d?.items ?? d?.taxonomies ?? []);
 export async function searchItemTypes(name: string) {
-  return (await targetRequest('taxonomy', 'GET', '/taxonomies', { query: { type: 'ITEM_TYPE', target: 'EXTERNAL', name, per_page: 50 }, source: 'taxonomy' })).data;
+  const q = name.trim().toLowerCase();
+  const match = (list: any[]) => list.filter((t) => String(t.name ?? '').toLowerCase().includes(q));
+  for (const path of ['/taxonomies', '/taxonomy']) {
+    try {
+      const d = (await targetRequest('taxonomy', 'GET', path, { query: { type: 'ITEM_TYPE', target: 'EXTERNAL', name, per_page: 100 }, source: 'taxonomy-search', retries: 1 })).data;
+      const hits = match(listOf(d));
+      if (hits.length) return hits;
+    } catch { /* try the next way */ }
+  }
+  if (!itemTypeCache || Date.now() - itemTypeCache.at > 6 * 3600e3) {
+    let all: any[] = [];
+    for (const path of ['/taxonomies', '/taxonomy']) {
+      try { all = await getAllPages('taxonomy', path, { type: 'ITEM_TYPE', target: 'EXTERNAL' }, { perPage: 1000, maxPages: 50, source: 'taxonomy-search' }); } catch { all = []; }
+      if (all.length) break;
+    }
+    if (!all.length) throw new Error('Target taxonomy search did not answer. Add the category by its item type ID instead (ask Target for the ID).');
+    itemTypeCache = { at: Date.now(), list: all.filter((t) => !t.type || String(t.type).toUpperCase() === 'ITEM_TYPE') };
+  }
+  return match(itemTypeCache.list).slice(0, 100);
 }
 
 // ---------------- Seller setup ----------------
