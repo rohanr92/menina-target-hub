@@ -57,12 +57,24 @@ export default function ProductDetail() {
   const reloadAll = () => { d.reload(); preview.reload(); };
   const save = (body: any, msg = 'Saved') => run('save', () => patch(`/api/products/${id}`, body), msg).then(reloadAll);
   const push = (force = false) => run('push', async () => {
+    // first send: show exactly what Target will receive. A family's structure can't be changed after it's created.
+    if (!variants.some((v: any) => v.targetProductId)) {
+      const inc = variants.filter((v: any) => v.syncEnabled);
+      const so = p.sizeOption || detected.sizeOption, co = p.colorOption || detected.colorOption;
+      const uniq = (o: string | null) => (o ? [...new Set(inc.map((v: any) => v.options?.[o]).filter(Boolean))] : []) as string[];
+      const theme = detected.theme;
+      const what = theme === 'SA'
+        ? `STAND-ALONE item${inc.length > 1 ? 's' : ''} (no parent): ${inc.map((v: any) => v.sku).join(', ')}`
+        : `PARENT ${pv?.parent?.external_id ?? p.parentExternalId ?? '(VAP)'} with ${inc.length} child item(s)\nVariation theme: ${theme.toUpperCase()}`;
+      const msg = `First send to Target. Please check, this can't be changed later:\n\n${what}\nColors: ${uniq(co).join(', ') || '-'}\nSizes: ${uniq(so).join(', ') || '-'}\n${inc.length} of ${variants.length} SKUs included (the rest are excluded)\n\nSend now?`;
+      if (!confirm(msg)) return undefined as any;
+    }
     const r = await post(`/api/products/${id}/push`, { force });
     setLastResult(r);
     if (r.blocked) throw new Error('Fix the errors below first (or use “Send anyway”).');
     if (!r.ok) throw new Error(r.error ?? 'Target rejected the request');
     return r;
-  }, 'Sent to Target. Price and inventory are queued.').then(reloadAll);
+  }, (r: any) => (r ? 'Sent to Target. Price and inventory are queued.' : 'Not sent')).then(reloadAll);
   const optionNames: string[] = p.optionNames ?? [];
   const keys = [...new Set((pv?.items?.[0]?.payload?.fields ?? []).map((f: any) => f.name))] as string[];
   const onTarget = variants.some((v: any) => v.targetProductId);
