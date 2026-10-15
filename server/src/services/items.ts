@@ -1,5 +1,5 @@
 // Create / update / unlist items on Target and track their status.
-import { and, eq, inArray, isNotNull, or } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, isNull, or } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { getSync, getTargetCreds } from '../lib/settings.js';
 import * as T from '../target/api.js';
@@ -11,11 +11,17 @@ function latestStatus(prod: any) {
   return st.find((s) => s.latest) ?? st.find((s) => s.current) ?? st.sort((a, b) => (b.version ?? 0) - (a.version ?? 0))[0];
 }
 
+/** Target puts the TCIN in different places depending on the endpoint. */
+const tcinOf = (prod: any): string | undefined => {
+  const t = prod?.tcin ?? prod?.TCIN ?? prod?.item?.tcin ?? prod?.product?.tcin ?? latestStatus(prod)?.tcin;
+  return t ? String(t) : undefined;
+};
+
 async function saveVariantFromTarget(variantId: string, prod: any) {
   const s = latestStatus(prod);
   await db.update(schema.variants).set({
     targetProductId: prod.id ?? undefined,
-    tcin: prod.tcin ?? undefined,
+    tcin: tcinOf(prod),
     listingStatus: s?.listing_status ?? undefined,
     validationStatus: s?.validation_status ?? undefined,
     errors: s?.errors ?? [],
@@ -27,7 +33,7 @@ async function saveParentFromTarget(productId: string, prod: any) {
   const s = latestStatus(prod);
   await db.update(schema.products).set({
     targetParentId: prod.id ?? undefined,
-    targetParentTcin: prod.tcin ?? undefined,
+    targetParentTcin: tcinOf(prod),
     parentStatus: s?.listing_status ?? undefined,
     parentValidation: s?.validation_status ?? undefined,
     parentErrors: s?.errors ?? [],
@@ -152,7 +158,31 @@ export async function refreshProductStatus(productId: string) {
   if (p.targetParentId) await saveParentFromTarget(productId, await T.getProduct(p.targetParentId));
   const vs = await db.select().from(schema.variants).where(and(eq(schema.variants.productId, productId), isNotNull(schema.variants.targetProductId)));
   for (const v of vs) await saveVariantFromTarget(v.id, await T.getProduct(v.targetProductId!));
-  return { refreshed: vs.length + (p.targetParentId ? 1 : 0) };
+  const tcins = await fillMissingTcins(productId);
+  return { refreshed: vs.length + (p.targetParentId ? 1 : 0), tcinsFound: tcins };
+}
+
+/**
+ * TCINs are assigned a little after creation and the single-item endpoint does not always return them.
+ * Look them up in the catalog by SKU (external_id) for items that still have none.
+ */
+export async function fillMissingTcins(productId?: string) {
+  let found = 0;
+  const vs = await db.select().from(schema.variants).where(and(isNotNull(schema.variants.targetProductId), isNull(schema.variants.tcin), ...(productId ? [eq(schema.variants.productId, productId)] : [])));
+  for (const v of vs.slice(0, 100)) {
+    if (!v.sku) continue;
+    const c = (await T.getCatalog({ external_id: v.sku }).catch(() => [])).find((x: any) => x.external_id === v.sku || x.id === v.targetProductId);
+    const t = tcinOf(c);
+    if (t) { await db.update(schema.variants).set({ tcin: t }).where(eq(schema.variants.id, v.id)); found++; }
+  }
+  const ps = await db.select().from(schema.products).where(and(isNotNull(schema.products.targetParentId), isNull(schema.products.targetParentTcin), ...(productId ? [eq(schema.products.id, productId)] : [])));
+  for (const p of ps) {
+    if (!p.parentExternalId) continue;
+    const c = (await T.getCatalog({ external_id: p.parentExternalId }).catch(() => [])).find((x: any) => x.external_id === p.parentExternalId || x.id === p.targetParentId);
+    const t = tcinOf(c);
+    if (t) { await db.update(schema.products).set({ targetParentTcin: t }).where(eq(schema.products.id, p.id)); found++; }
+  }
+  return found;
 }
 
 /** Refresh every item using the paginated catalog endpoint (few calls). Also links items created elsewhere by SKU. */
@@ -178,6 +208,7 @@ export async function refreshPending() {
   const vs = await db.select().from(schema.variants).where(and(isNotNull(schema.variants.targetProductId),
     or(inArray(schema.variants.listingStatus, ['PENDING']), inArray(schema.variants.validationStatus, ['INITIATED', 'REVIEW']))));
   for (const v of vs.slice(0, 200)) await saveVariantFromTarget(v.id, await T.getProduct(v.targetProductId!));
+  await fillMissingTcins().catch(() => 0);
   return vs.length;
 }
 
