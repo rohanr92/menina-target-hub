@@ -100,6 +100,7 @@ export default function ProductDetail() {
                 <input defaultValue={p.parentExternalId ?? ''} disabled={!!p.targetParentId} placeholder={pv?.parent?.external_id} onBlur={(e) => e.target.value !== (p.parentExternalId ?? '') && save({ parentExternalId: e.target.value })} />
               </Field>
             )}
+            {!onTarget && variants.length > 1 && <OnlySend variants={variants} sizeOpt={p.sizeOption || detected.sizeOption} colorOpt={p.colorOption || detected.colorOption} busy={busy} run={run} done={reloadAll} />}
             {p.itemTypeId && <Link className="small" to={`/taxonomy/${p.itemTypeId}`}>Edit attribute mapping for this item type →</Link>}
           </div>
         </Card>
@@ -222,6 +223,45 @@ export default function ProductDetail() {
           <Card title="Product"><Json value={live.product} /></Card>
         </div>
       </Modal>}
+    </div>
+  );
+}
+
+/** Pick which SKUs go to Target before the first send (e.g. one color for a size-only family). */
+function OnlySend({ variants, sizeOpt, colorOpt, busy, run, done }: any) {
+  const vals = (opt: string | null) => (opt ? [...new Set(variants.map((v: any) => v.options?.[opt]).filter(Boolean))] as string[] : []);
+  const colors = vals(colorOpt), sizes = vals(sizeOpt);
+  const [color, setColor] = useState('');
+  const [size, setSize] = useState('');
+  const [skuOne, setSkuOne] = useState('');
+  const included = variants.filter((v: any) => v.syncEnabled).length;
+  const apply = (keep: (v: any) => boolean, label: string) => run('only', async () => {
+    let n = 0;
+    for (const v of variants) {
+      const want = keep(v);
+      if (!!v.syncEnabled !== want) await patch(`/api/variants/${v.id}`, { syncEnabled: want });
+      if (want) n++;
+    }
+    return n;
+  }, (n: any) => `${label}: ${n} SKU(s) will be sent, the rest are excluded`).then(done);
+  const match = (v: any) => (!color || v.options?.[colorOpt] === color) && (!size || v.options?.[sizeOpt] === size);
+  return (
+    <div className="stack" style={{ borderTop: '1px solid var(--line, #e5e7eb)', paddingTop: 10 }}>
+      <div className="small"><strong>Which SKUs to send</strong> <span className="muted">· {included} of {variants.length} included</span></div>
+      <div className="grid2" style={{ gap: 8 }}>
+        {colors.length > 0 && <Field label="Only this color"><select value={color} onChange={(e) => setColor(e.target.value)}><option value="">All colors</option>{colors.map((c) => <option key={c}>{c}</option>)}</select></Field>}
+        {sizes.length > 0 && <Field label="Only this size"><select value={size} onChange={(e) => setSize(e.target.value)}><option value="">All sizes</option>{sizes.map((c) => <option key={c}>{c}</option>)}</select></Field>}
+      </div>
+      <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+        <Btn size="sm" busy={busy === 'only'} onClick={() => apply(match, 'Applied')}>Apply</Btn>
+        <Btn size="sm" kind="ghost" busy={busy === 'only'} onClick={() => apply(() => true, 'All included')}>Include all</Btn>
+      </div>
+      <Field label="Or send just one SKU (stand-alone test)">
+        <div className="row" style={{ gap: 6 }}>
+          <select value={skuOne} onChange={(e) => setSkuOne(e.target.value)}><option value="">— pick a SKU —</option>{variants.map((v: any) => <option key={v.id} value={v.id}>{v.sku}</option>)}</select>
+          <Btn size="sm" disabled={!skuOne} busy={busy === 'only'} onClick={() => apply((v: any) => v.id === skuOne, 'One SKU')}>Keep only this</Btn>
+        </div>
+      </Field>
     </div>
   );
 }

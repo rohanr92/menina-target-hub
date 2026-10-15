@@ -59,7 +59,7 @@ export default async function (app: FastifyInstance) {
       try { qty = await desiredQuantities(v); } catch { qty = null; }
       return { ...v, barcodeCheck: validateBarcode(v.barcode), targetPrice: price, priceIssues: priceIssues(price), targetQty: qty };
     }));
-    return { product: p, variants: enriched, detected: { theme: detectTheme(p, vs), ...detectOptions(p) } };
+    return { product: p, variants: enriched, detected: { theme: detectTheme({ ...p, theme: null } as any, vs.filter((v) => v.syncEnabled)), ...detectOptions(p) } };
   });
 
   app.get('/api/products/:id/preview', async (req) => buildProduct((req.params as any).id));
