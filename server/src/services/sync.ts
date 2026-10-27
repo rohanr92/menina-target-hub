@@ -69,6 +69,11 @@ export async function desiredQuantities(v: typeof schema.variants.$inferSelect):
     if (!dcs.length) throw new Error('Target returned no distribution centers for this seller. Ask Target to set one up on your account.');
   }
   const known = new Set(dcs.map((d) => d.id));
+  // fixed stock set by hand in the hub (e.g. for Target's test orders): used instead of Shopify until cleared
+  const fixed = (v.overrides as any)?.fixed_qty as Record<string, number> | undefined;
+  if (fixed && Object.keys(fixed).length) {
+    return Object.fromEntries(Object.entries(fixed).filter(([dc]) => known.has(dc)).map(([dc, q]) => [dc, Math.max(0, Math.floor(Number(q) || 0))]));
+  }
   const map = Object.fromEntries(Object.entries(shop.locationMap ?? {}).filter(([, dc]) => dc && known.has(dc)));
   const byLoc = (v.inventoryByLoc ?? {}) as Record<string, number>;
   const out: Record<string, number> = {};

@@ -61,6 +61,7 @@ function StockCard({ stock, sel, setSel, onlyProblems, setOnlyProblems, busy, ru
   const problem = (r: any) => r.task?.status === 'failed' || !r.sentAt || (r.want && Object.entries(r.want).some(([dc, q]) => (r.sent ?? {})[dc] !== q));
   const rows = onlyProblems ? rowsAll.filter(problem) : rowsAll;
   const [priceFor, setPriceFor] = useState<any>(null);
+  const [stockFor, setStockFor] = useState<any>(null);
   const toggle = (id: string) => { const n = new Set(sel); n.has(id) ? n.delete(id) : n.add(id); setSel(n); };
   const send = (ids?: string[]) => run('send', () => post('/api/sync/stock/send', { variantIds: ids }), (r: any) => `Sending stock for ${r.queued} SKU(s). Refresh in a few seconds.`).then(() => setTimeout(reload, 4000));
   return (
@@ -101,10 +102,12 @@ function StockCard({ stock, sel, setSel, onlyProblems, setOnlyProblems, busy, ru
                 return <td key={x.id} className="num">{w ?? '–'} / <span className={sent === undefined ? 'bad' : sent !== w ? 'warn' : ''}>{sent ?? 'not sent'}</span></td>;
               })}
               <td className="small">
-                {r.task?.status === 'failed' ? <span className="bad">failed: {r.task.error}</span>
+                {r.stockFixed && <div className="muted">fixed stock</div>}
+                <button className="btn sm" style={{ marginBottom: 4 }} onClick={() => setStockFor(r)}>Set stock</button>
+                <div>{r.task?.status === 'failed' ? <span className="bad">failed: {r.task.error}</span>
                   : r.task?.status === 'pending' && r.task.error ? <span className="warn">retrying: {r.task.error}</span>
                   : r.task?.status === 'pending' || r.task?.status === 'running' ? 'sending…'
-                  : r.sentAt ? 'sent' : <span className="bad">never sent</span>}
+                  : r.sentAt ? 'sent' : <span className="bad">never sent</span>}</div>
               </td>
               <td className="muted small">{r.sentAt ? ago(r.sentAt) : ''}</td>
               <td className="small" style={{ whiteSpace: 'nowrap' }}>
@@ -116,6 +119,7 @@ function StockCard({ stock, sel, setSel, onlyProblems, setOnlyProblems, busy, ru
           ))}
         </tbody>
       </table></div>
+      {stockFor && <StockModal row={stockFor} dcs={dcs} onClose={() => setStockFor(null)} onSaved={() => { setStockFor(null); setTimeout(reload, 4000); }} />}
       {priceFor && <PriceModal row={priceFor} onClose={() => setPriceFor(null)} onSaved={() => { setPriceFor(null); setTimeout(reload, 4000); }} />}
     </Card>
   );
@@ -136,6 +140,24 @@ function PriceModal({ row, onClose, onSaved }: { row: any; onClose: () => void; 
       <div className="row" style={{ gap: 8, marginTop: 12 }}>
         <Btn kind="primary" busy={busy === 'save'} onClick={() => run('save', () => post(`/api/variants/${row.variantId}/set-price`, f), 'Price saved and sent to Target').then((r) => r && onSaved())}>Save &amp; send to Target</Btn>
         {row.priceOverride && <Btn kind="ghost" busy={busy === 'clear'} onClick={() => run('clear', () => post(`/api/variants/${row.variantId}/set-price`, { clear: true }), 'Back to Shopify price').then((r) => r && onSaved())}>Use Shopify price again</Btn>}
+      </div>
+    </Modal>
+  );
+}
+
+function StockModal({ row, dcs, onClose, onSaved }: { row: any; dcs: { id: string; name: string }[]; onClose: () => void; onSaved: () => void }) {
+  const start = row.stockFixed ?? row.want ?? {};
+  const [q, setQ] = useState<Record<string, any>>(Object.fromEntries(dcs.map((d) => [d.id, start[d.id] ?? ''])));
+  const { busy, run } = useAction();
+  return (
+    <Modal title={`Stock on Target · ${row.sku}`} onClose={onClose}>
+      <div className="muted small" style={{ marginBottom: 10 }}>Shopify stock: {row.shopify}. The numbers you set here are sent now and kept for this SKU (Shopify stock changes won't overwrite them) until you click "Use Shopify stock again".</div>
+      <div className="row" style={{ gap: 10 }}>
+        {dcs.map((d) => <div key={d.id} style={{ width: 160 }}><Field label={`${d.name} (${d.id})`}><input type="number" min={0} step={1} value={q[d.id]} onChange={(e) => setQ({ ...q, [d.id]: e.target.value })} /></Field></div>)}
+      </div>
+      <div className="row" style={{ gap: 8, marginTop: 12 }}>
+        <Btn kind="primary" busy={busy === 'save'} onClick={() => run('save', () => post(`/api/variants/${row.variantId}/set-stock`, { qty: q }), 'Stock saved and sent to Target').then((r) => r && onSaved())}>Save &amp; send to Target</Btn>
+        {row.stockFixed && <Btn kind="ghost" busy={busy === 'clear'} onClick={() => run('clear', () => post(`/api/variants/${row.variantId}/set-stock`, { clear: true }), 'Back to Shopify stock').then((r) => r && onSaved())}>Use Shopify stock again</Btn>}
       </div>
     </Modal>
   );

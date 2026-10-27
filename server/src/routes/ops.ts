@@ -80,6 +80,7 @@ export default async function (app: FastifyInstance) {
         variantId: v.id, productId: v.productId, sku: v.sku, tcin: v.tcin, syncEnabled: v.syncEnabled,
         shopify: v.inventory, byLoc: v.inventoryByLoc, want, sent: v.lastQtySent ?? {}, sentAt: v.lastQtySentAt,
         shopifyPrice: v.price, compareAtPrice: v.compareAtPrice, priceSent: v.lastPriceSent ?? null, priceSentAt: v.lastPriceSentAt,
+        stockFixed: (v.overrides as any)?.fixed_qty ?? null,
         priceOverride: (v.overrides as any)?.list_price ? { list_price: (v.overrides as any).list_price, offer_price: (v.overrides as any).offer_price ?? null, map_price: (v.overrides as any).map_price ?? null } : null,
         task: t ? { status: t.status, error: t.lastError, result: t.result, at: t.updatedAt } : null,
       });
@@ -109,6 +110,30 @@ export default async function (app: FastifyInstance) {
     }
     await db.update(schema.variants).set({ overrides: ov }).where(eq(schema.variants.id, id));
     if (v.targetProductId) await enqueue('price', id, { force: true });
+    return { ok: true, queued: !!v.targetProductId };
+  });
+
+  /** Fixed stock for one SKU per DC (sent right away; Shopify stock is ignored for this SKU until cleared). */
+  app.post('/api/variants/:id/set-stock', async (req) => {
+    const id = (req.params as any).id;
+    const b = (req.body ?? {}) as { qty?: Record<string, any>; clear?: boolean };
+    const v = await db.query.variants.findFirst({ where: eq(schema.variants.id, id) });
+    if (!v) throw bad('SKU not found', 404);
+    const ov: Record<string, any> = { ...((v.overrides as any) ?? {}) };
+    delete ov.fixed_qty;
+    if (!b.clear) {
+      const qty: Record<string, number> = {};
+      for (const [dc, q] of Object.entries(b.qty ?? {})) {
+        if (q === '' || q == null) continue;
+        const n = Number(q);
+        if (!Number.isInteger(n) || n < 0) throw bad('Stock must be a whole number, 0 or more');
+        qty[dc] = n;
+      }
+      if (!Object.keys(qty).length) throw bad('Enter a quantity for at least one warehouse');
+      ov.fixed_qty = qty;
+    }
+    await db.update(schema.variants).set({ overrides: ov }).where(eq(schema.variants.id, id));
+    if (v.targetProductId) await enqueue('inventory', id, { force: true });
     return { ok: true, queued: !!v.targetProductId };
   });
 
