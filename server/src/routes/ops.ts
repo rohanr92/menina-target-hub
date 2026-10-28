@@ -201,7 +201,10 @@ export default async function (app: FastifyInstance) {
     const o = await db.query.orders.findFirst({ where: eq(schema.orders.id, (req.params as any).id) });
     if (!o) throw bad('Order not found', 404);
     const skus = ((o.raw as any)?.order_lines ?? []).map((l: any) => l.external_id).filter(Boolean);
-    const vs = skus.length ? await db.select({ sku: schema.variants.sku, productId: schema.variants.productId, title: schema.variants.title, imageUrl: schema.variants.imageUrl }).from(schema.variants).where(inArray(schema.variants.sku, skus)) : [];
+    const vs = skus.length ? await db.select({
+      sku: schema.variants.sku, productId: schema.variants.productId, title: schema.variants.title, imageUrl: schema.variants.imageUrl,
+      options: schema.variants.options, productTitle: schema.products.title, productImages: schema.products.images,
+    }).from(schema.variants).leftJoin(schema.products, eq(schema.products.id, schema.variants.productId)).where(inArray(schema.variants.sku, skus)) : [];
     return { ...o, items: vs, shippingMethods: await db.select().from(schema.shippingMethods) };
   });
   app.post('/api/orders/poll', async () => runJob('orders', O.pollOrders));

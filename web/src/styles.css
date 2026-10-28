@@ -263,3 +263,49 @@ table.tight td, table.tight th { padding: 8px 12px; }
 /* ---------- orders badge ---------- */
 .nav-badge { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 10px; background: rgba(255,255,255,.14); color: inherit; }
 .nav-badge.hot { background: #e5484d; color: #fff; }
+
+/* ---------- order page (Shopify-style) ---------- */
+.od-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; margin-bottom: 18px; flex-wrap: wrap; }
+.od-head h1 { margin: 4px 0 8px; font-size: 26px; }
+.od-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 20px; align-items: start; }
+@media (max-width: 1100px) { .od-grid { grid-template-columns: 1fr; } }
+.od-main, .od-side { display: grid; gap: 16px; }
+.od-card { border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); box-shadow: var(--shadow); overflow: hidden; }
+.od-card > header { display: flex; align-items: center; gap: 8px; padding: 14px 18px; font-weight: 700; border-bottom: 1px solid var(--line); }
+.od-card > header .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+.od-card > header.ok .dot { background: var(--ok); } .od-card > header.warn .dot { background: var(--warn); } .od-card > header.bad .dot { background: var(--bad); }
+.od-card > header.ok { background: var(--ok-soft); } .od-card > header.warn { background: var(--warn-soft); } .od-card > header.bad { background: var(--bad-soft); }
+.od-card > header .muted { font-weight: 500; }
+.od-hint { margin-left: auto; display: flex; gap: 6px; font-weight: 400; }
+.od-item { display: grid; grid-template-columns: 56px minmax(0, 1fr) auto auto; gap: 14px; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+.od-item:last-child { border-bottom: 0; }
+.od-thumb { position: relative; width: 56px; height: 56px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg-2); display: grid; place-items: center; overflow: visible; }
+.od-thumb img { width: 100%; height: 100%; object-fit: contain; border-radius: 10px; }
+.od-thumb span { color: var(--muted); font-weight: 700; }
+.od-thumb b { position: absolute; top: -7px; right: -7px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px; background: #475569; color: #fff; font-size: 11.5px; display: grid; place-items: center; }
+.od-title { font-weight: 600; }
+.od-price { text-align: right; white-space: nowrap; }
+.od-price.bad { color: var(--bad); }
+.od-right { justify-self: end; }
+.od-qty { display: flex; gap: 8px; }
+.od-qty label { display: grid; gap: 2px; font-size: 11.5px; color: var(--muted); font-weight: 600; }
+.od-qty input { width: 70px; }
+.od-actions { display: grid; gap: 14px; padding: 16px 18px; background: var(--bg-2); border-top: 1px solid var(--line); }
+.od-act-t { font-weight: 700; margin-bottom: 6px; }
+.od-foot { padding: 10px 18px; border-top: 1px solid var(--line); background: var(--bg-2); }
+.od-kv { display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; padding: 14px 18px; }
+.od-kv > :nth-child(even) { text-align: right; }
+.od-pad { padding: 14px 18px; display: grid; gap: 4px; }
+.od-units { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--line); }
+.od-units > div { padding: 12px; text-align: center; display: grid; }
+.od-units > div + div { border-left: 1px solid var(--line); }
+.od-units b { font-size: 20px; } .od-units span { font-size: 12px; color: var(--muted); }
+.od-units .ok b { color: var(--ok); } .od-units .bad b { color: var(--bad); }
+.od-timeline { list-style: none; margin: 0; padding: 14px 18px; display: grid; gap: 12px; }
+.od-timeline li { display: grid; grid-template-columns: 14px 1fr auto; gap: 10px; align-items: baseline; }
+.od-tdot { width: 9px; height: 9px; border-radius: 50%; background: var(--line-2); }
+.od-timeline li.ok .od-tdot { background: var(--ok); } .od-timeline li.bad .od-tdot { background: var(--bad); }
+.od-alert { padding: 10px 14px; border-radius: 10px; margin-bottom: 14px; font-size: 13.5px; }
+.od-alert.bad { background: var(--bad-soft); color: #991b1b; border: 1px solid #fecaca; }
+.pill { display: inline-flex; align-items: center; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--bg-3); color: var(--ink); }
+.pill.ok { background: var(--ok-soft); color: var(--ok); } .pill.warn { background: var(--warn-soft); color: var(--warn); } .pill.bad { background: var(--bad-soft); color: var(--bad); }
