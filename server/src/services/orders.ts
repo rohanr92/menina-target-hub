@@ -14,7 +14,7 @@ const errMsg = (e: any) => e?.message ?? String(e);
 
 async function upsertOrder(o: any) {
   const row = {
-    id: String(o.id), orderNumber: o.order_number ?? null, status: o.status ?? 'UNKNOWN',
+    id: String(o.id), orderNumber: o.order_number ?? null, status: o.order_status ?? o.status ?? 'UNKNOWN', // Target sends order_status
     orderDate: o.order_date ? new Date(o.order_date) : null,
     requestedShipmentDate: o.requested_shipment_date ? new Date(o.requested_shipment_date) : null,
     requestedDeliveryDate: o.requested_delivery_date ? new Date(o.requested_delivery_date) : null,

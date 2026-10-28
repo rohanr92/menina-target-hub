@@ -20,7 +20,7 @@ export default function Orders() {
         <Tabs value={status} onChange={setStatus} items={[['open', 'Open'], ['RELEASED_FOR_SHIPMENT', 'Released'], ['ACKNOWLEDGED_BY_SELLER', 'Acknowledged'], ['PARTIALLY_SHIPPED', 'Partially shipped'], ['SHIPPED', 'Shipped'], ['CANCELED', 'Canceled'], ['', 'All']]} />
         <input style={{ width: 220 }} placeholder="Order number" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
-      <Card pad={false}>
+      <Card pad={false} title={list.data ? `${list.data.length} order${list.data.length === 1 ? '' : 's'}` : undefined}>
         {list.loading && !list.data ? <Loading /> : (
           <div className="table-wrap"><table>
             <thead><tr><th>Order</th><th>Status</th><th>Ordered</th><th>Ship by</th><th>Deliver by</th><th>Customer</th><th className="num">Units</th><th className="num">Total</th><th>Shopify</th></tr></thead>
