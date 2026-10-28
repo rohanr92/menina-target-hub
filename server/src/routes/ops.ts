@@ -179,6 +179,8 @@ export default async function (app: FastifyInstance) {
 
   // ---------------- orders ----------------
   app.get('/api/orders', async (req) => {
+    // orders saved before the order_status fix: take the status from Target's saved answer
+    await db.execute(sql`UPDATE orders SET status = raw->>'order_status' WHERE status = 'UNKNOWN' AND raw->>'order_status' IS NOT NULL`);
     const { status, q } = req.query as any;
     const conds: any[] = [];
     if (status === 'open') conds.push(inArray(schema.orders.status, ['RELEASED_FOR_SHIPMENT', 'ACKNOWLEDGED_BY_SELLER', 'PARTIALLY_SHIPPED']));
@@ -206,9 +208,13 @@ export default async function (app: FastifyInstance) {
   app.post('/api/orders/import', async (req) => {
     // pull orders in any status (e.g. to load test orders already acknowledged elsewhere)
     const { status } = (req.body ?? {}) as { status?: string };
-    const list = await T.listOrders({ order_status: status || 'RELEASED_FOR_SHIPMENT,ACKNOWLEDGED_BY_SELLER,PARTIALLY_SHIPPED,SHIPPED,CANCELED' });
-    for (const o of list) await O.refreshOrder(String(o.id)).catch(() => undefined);
-    return { imported: list.length };
+    // one call per status (works whether or not Target accepts a comma list), then refresh every order we know
+    const statuses = status ? [status] : ['RELEASED_FOR_SHIPMENT', 'ACKNOWLEDGED_BY_SELLER', 'PARTIALLY_SHIPPED', 'SHIPPED', 'CANCELED'];
+    const ids = new Set<string>();
+    for (const st of statuses) for (const o of await T.listOrders({ order_status: st }).catch(() => [])) ids.add(String(o.id));
+    for (const o of await db.select({ id: schema.orders.id }).from(schema.orders)) ids.add(o.id);
+    for (const id of ids) await O.refreshOrder(id).catch(() => undefined);
+    return { imported: ids.size };
   });
   app.post('/api/orders/:id/refresh', async (req) => O.refreshOrder((req.params as any).id));
   app.post('/api/orders/:id/acknowledge', async (req) => O.acknowledge((req.params as any).id));
