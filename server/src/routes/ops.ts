@@ -221,6 +221,22 @@ export default async function (app: FastifyInstance) {
     for (const l of lines ?? []) if (l.quantity > 0) out.push(await O.cancelLine((req.params as any).id, l.order_line_number, l.quantity, reason));
     return out;
   });
+  /** Ship the entered quantities and cancel whatever is left on those lines (one step). */
+  app.post('/api/orders/:id/ship-cancel-rest', async (req) => {
+    const { lines, reason } = (req.body ?? {}) as { lines: any[]; reason: string };
+    if (!reason) throw bad('Cancellation reason is required');
+    return O.shipAndCancelRest((req.params as any).id, lines ?? [], reason);
+  });
+  /** Counts for the menu badge / new-order alert. */
+  app.get('/api/orders/counts', async () => {
+    const r = await db.execute(sql`SELECT
+      count(*) FILTER (WHERE status = 'RELEASED_FOR_SHIPMENT')::int AS released,
+      count(*) FILTER (WHERE status IN ('RELEASED_FOR_SHIPMENT','ACKNOWLEDGED_BY_SELLER','PARTIALLY_SHIPPED'))::int AS open,
+      count(*) FILTER (WHERE status IN ('RELEASED_FOR_SHIPMENT','ACKNOWLEDGED_BY_SELLER','PARTIALLY_SHIPPED') AND requested_shipment_date < now())::int AS late,
+      max(order_date) AS newest
+      FROM orders`);
+    return r.rows[0];
+  });
   app.put('/api/orders/:id/fulfillments', async (req) => {
     const res = await T.updateFulfillments((req.params as any).id, (req.body as any).items);
     await O.refreshOrder((req.params as any).id);

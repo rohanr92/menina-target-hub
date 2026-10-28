@@ -58,6 +58,28 @@ function EnvSwitch() {
   );
 }
 
+/** Open-order count in the menu; new (unacknowledged) orders show in red and raise a browser alert. */
+function OrdersBadge() {
+  const [c, setC] = useState<any>(null);
+  useEffect(() => {
+    let last = -1;
+    const tick = () => get('/api/orders/counts').then((x: any) => {
+      setC(x);
+      if (last >= 0 && x.released > last) {
+        try { if ('Notification' in window && Notification.permission === 'granted') new Notification('New Target order', { body: `${x.released} order(s) waiting for acknowledgement` }); } catch { /* ignore */ }
+      }
+      last = x.released;
+      document.title = x.released ? `(${x.released}) Target Hub` : 'Target Hub';
+    }).catch(() => {});
+    tick();
+    try { if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission(); } catch { /* ignore */ }
+    const t = setInterval(tick, 60000);
+    return () => clearInterval(t);
+  }, []);
+  if (!c?.open) return null;
+  return <span className={`nav-badge ${c.released || c.late ? 'hot' : ''}`} title={`${c.open} open · ${c.released} new · ${c.late} late`}>{c.released ? `${c.released} new` : c.open}</span>;
+}
+
 function StageBanner() {
   const [env, setEnv] = useState<string | null>(null);
   useEffect(() => { get('/api/settings').then((s) => setEnv(s.activeEnv)).catch(() => {}); }, []);
@@ -89,7 +111,7 @@ export default function App() {
             {NAV.map(([group, links]) => (
               <div key={group}>
                 <div className="nav-group">{group}</div>
-                {links.map(([to, label]) => <NavLink key={to} to={to} end={to === '/'}>{label}</NavLink>)}
+                {links.map(([to, label]) => <NavLink key={to} to={to} end={to === '/'}>{label}{to === '/orders' && <OrdersBadge />}</NavLink>)}
               </div>
             ))}
           </nav>

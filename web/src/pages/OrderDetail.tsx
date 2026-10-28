@@ -7,6 +7,15 @@ import { Btn, Card, ErrorBox, Field, Json, Loading, PageHead, Status, useAction,
 const REASONS = ['ITEM_NOT_AVAILABLE', 'COULD_NOT_SHIP', 'SHIPPING_ADDRESS_UNDELIVERABLE', 'BUYER_CANCELED', 'GENERAL_ADJUSTMENT', 'ALTERNATE_ITEM_PROVIDED', 'MERCHANDISE_NOT_RECEIVED', 'CUSTOMER_RETURNED_ITEM', 'CUSTOMER_EXCHANGE', 'OTHER'];
 const qtyIn = (l: any, s: string) => (l.order_line_statuses ?? []).filter((x: any) => x.status === s).reduce((a: number, x: any) => a + Number(x.quantity || 0), 0);
 const openQty = (l: any) => qtyIn(l, 'ACKNOWLEDGED_BY_SELLER') + qtyIn(l, 'PENDING');
+const digits = (n: number) => Array.from({ length: n }, () => Math.floor(Math.random() * 10)).join('');
+/** A tracking number in the right format for the carrier (for stage tests; stage does not check real shipments). */
+function testTracking(method: string, carrier = '') {
+  const c = `${carrier} ${method}`.toUpperCase();
+  if (c.includes('USPS')) return `9400${digits(18)}`;
+  if (c.includes('UPS')) return `1Z${Math.random().toString(36).slice(2, 8).toUpperCase().padEnd(6, 'X')}03${digits(8)}`;
+  if (c.includes('FEDEX') || c.includes('FDE')) return digits(12);
+  return digits(12);
+}
 
 export default function OrderDetail() {
   const { id } = useParams();
@@ -29,6 +38,7 @@ export default function OrderDetail() {
   const enc = encodeURIComponent(o.id);
   const fulfillments: any[] = Array.isArray(o.fulfillments) ? o.fulfillments : [];
   const anyOpen = lines.some((l) => openQty(l) > 0);
+  const shipLines = () => Object.entries(ship).filter(([, q]) => q > 0).map(([n, q]) => ({ order_line_number: n, quantity: q, tracking_number: tracking, shipping_method: method, shipped_date: new Date(shippedDate).toISOString() }));
 
   return (
     <div className="page">
@@ -96,10 +106,16 @@ export default function OrderDetail() {
                   <Field label="Tracking number"><input value={tracking} onChange={(e) => setTracking(e.target.value)} /></Field>
                   <Field label="Shipped at"><input type="datetime-local" value={shippedDate} onChange={(e) => setShippedDate(e.target.value)} /></Field>
                 </div>
-                <div><Btn kind="primary" busy={busy === 'ship'} disabled={!Object.values(ship).some((x) => x > 0)} onClick={() => run('ship', () => post(`/api/orders/${enc}/ship`, {
-                  lines: Object.entries(ship).filter(([, q]) => q > 0).map(([n, q]) => ({ order_line_number: n, quantity: q, tracking_number: tracking, shipping_method: method, shipped_date: new Date(shippedDate).toISOString() })),
-                }), 'Fulfillment sent to Target').then(() => { setShip({}); reload(); })}>Send shipment</Btn></div>
-                <span className="small muted">The tracking number must match the carrier. Target checks the format.</span>
+                <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                  <Btn kind="primary" busy={busy === 'ship'} disabled={!Object.values(ship).some((x) => x > 0)} onClick={() => run('ship', () => post(`/api/orders/${enc}/ship`, {
+                    lines: shipLines(),
+                  }), 'Fulfillment sent to Target').then(() => { setShip({}); reload(); })}>Send shipment</Btn>
+                  <Btn busy={busy === 'shipc'} disabled={!Object.values(ship).some((x) => x > 0)} onClick={() => confirm(`Ship the entered quantities, then cancel what is left on those lines (reason: ${reason})?`) && run('shipc', () => post(`/api/orders/${enc}/ship-cancel-rest`, {
+                    lines: shipLines(), reason,
+                  }), (r: any) => `Shipped and canceled the rest on ${r?.canceled?.length ?? 0} line(s)`).then(() => { setShip({}); reload(); })}>Ship &amp; cancel the rest</Btn>
+                  <button className="btn ghost sm" onClick={() => setTracking(testTracking(method, o.shippingMethods.find((m: any) => m.shippingMethod === method)?.carrier))}>Test tracking number</button>
+                </div>
+                <span className="small muted">"Ship &amp; cancel the rest" ships the quantities above and cancels the unshipped units of those lines with the reason on the right (test plan 1.4, 2.4, 3.4). The tracking number must match the carrier.</span>
               </div>
               <div className="stack">
                 <h3>Cancel</h3>

@@ -208,10 +208,21 @@ export async function cancelLine(orderId: string, lineNumber: string, quantity: 
   if (!order) throw new Error('Order not found');
   const line = lineOf(order, lineNumber);
   const total = Number(line.quantity);
-  const shipped = qtyIn(line, 'SHIPPED');
+  let shipped = qtyIn(line, 'SHIPPED');
   const canceled = qtyIn(line, 'CANCELED');
-  const ack = qtyIn(line, 'ACKNOWLEDGED_BY_SELLER');
-  const pending = qtyIn(line, 'PENDING');
+  let ack = qtyIn(line, 'ACKNOWLEDGED_BY_SELLER');
+  let pending = qtyIn(line, 'PENDING');
+  // Target can take a moment to move shipped units into SHIPPED after a fulfillment. Use the fulfillments we sent,
+  // so the payload always carries the real SHIPPED quantity (Target: include the shipped quantity, never a 0 status).
+  const fulfilled = (Array.isArray(order.fulfillments) ? (order.fulfillments as any[]) : [])
+    .filter((f) => String(f.order_line_number) === String(line.order_line_number))
+    .reduce((a, f) => a + Number(f.quantity || 0), 0);
+  if (fulfilled > shipped) {
+    let extra = Math.min(fulfilled - shipped, ack + pending);
+    shipped += extra;
+    const fromAck = Math.min(ack, extra); ack -= fromAck; extra -= fromAck;
+    pending -= Math.min(pending, extra);
+  }
   const open = ack + pending;
   if (quantity < 1 || quantity > open) throw new Error(`Line ${lineNumber}: can cancel 1-${open} (shipped ${shipped}, already canceled ${canceled})`);
   const fromPending = Math.min(pending, quantity);
@@ -230,6 +241,25 @@ export async function cancelLine(orderId: string, lineNumber: string, quantity: 
   try { if (!order.shopifyOrderId) await adjustShopifyStock(orderId); } catch { /* retried on next poll */ }
   await requeueInventoryForOrder(orderId).catch(() => undefined);
   return res;
+}
+
+/**
+ * Ship some quantity and cancel what is left on those lines in one go
+ * (Target test plan 1.4 / 2.4 / 3.4: "ship one, cancel the unshipped quantity").
+ */
+export async function shipAndCancelRest(orderId: string, lines: ShipLine[], reason: string) {
+  const before = await refreshOrder(orderId);
+  if (!before) throw new Error('Order not found');
+  const want = lines.filter((l) => l.quantity > 0);
+  if (!want.length) throw new Error('Enter a ship quantity for at least one line');
+  const openBefore = new Map(want.map((l) => [String(l.order_line_number), openQty(lineOf(before, l.order_line_number))]));
+  const shipRes = await shipOrder(orderId, want);
+  const canceled: any[] = [];
+  for (const l of want) {
+    const left = (openBefore.get(String(l.order_line_number)) ?? 0) - l.quantity;
+    if (left > 0) canceled.push({ line: l.order_line_number, quantity: left, res: await cancelLine(orderId, String(l.order_line_number), left, reason) });
+  }
+  return { shipped: shipRes, canceled };
 }
 
 async function requeueInventoryForOrder(orderId: string) {

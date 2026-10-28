@@ -40,10 +40,16 @@ export async function reservedBySku(): Promise<Map<string, number>> {
     sql`${schema.orders.orderDate} > now() - interval '30 days'`,
   ));
   const out = new Map<string, number>();
-  const { deductShopifyStock, pushOrdersToShopify } = await getSync();
+  const sync = await getSync();
+  const { deductShopifyStock, pushOrdersToShopify } = sync;
+  // Can Target sales reach Shopify at all? On stage (writes off) Shopify never hears about them, so shipped units
+  // must stay deducted here, or Target would get the old stock back after a shipment.
+  const shop = await getShopify();
+  const { getActiveEnv } = await import('../lib/settings.js');
+  const shopifyUpdated = !!(shop.shopDomain && shop.accessToken) && ((await getActiveEnv()) === 'production' || sync.stage.allowShopifyWrites);
   // when the hub deducts Shopify stock itself, shipped units stay reserved until that deduction happened;
   // otherwise only still-open units are held back (your team updates Shopify stock for shipped units)
-  const counted = deductShopifyStock && !pushOrdersToShopify ? ['PENDING', 'ACKNOWLEDGED_BY_SELLER', 'SHIPPED'] : ['PENDING', 'ACKNOWLEDGED_BY_SELLER'];
+  const counted = !shopifyUpdated || (deductShopifyStock && !pushOrdersToShopify) ? ['PENDING', 'ACKNOWLEDGED_BY_SELLER', 'SHIPPED'] : ['PENDING', 'ACKNOWLEDGED_BY_SELLER'];
   for (const o of recent) {
     if (o.shopifyOrderId) continue;
     const adjusted = (o.shopifyStockAdjusted ?? {}) as Record<string, number>;
@@ -71,18 +77,17 @@ export async function desiredQuantities(v: typeof schema.variants.$inferSelect):
   const known = new Set(dcs.map((d) => d.id));
   // fixed stock set by hand in the hub (e.g. for Target's test orders): used instead of Shopify until cleared
   const fixed = (v.overrides as any)?.fixed_qty as Record<string, number> | undefined;
-  if (fixed && Object.keys(fixed).length) {
-    return Object.fromEntries(Object.entries(fixed).filter(([dc]) => known.has(dc)).map(([dc, q]) => [dc, Math.max(0, Math.floor(Number(q) || 0))]));
-  }
   const map = Object.fromEntries(Object.entries(shop.locationMap ?? {}).filter(([, dc]) => dc && known.has(dc)));
   const byLoc = (v.inventoryByLoc ?? {}) as Record<string, number>;
   const out: Record<string, number> = {};
-  if (Object.keys(map).length) {
+  if (fixed && Object.keys(fixed).length) {
+    for (const [dc, q] of Object.entries(fixed)) if (known.has(dc)) out[dc] = Math.max(0, Math.floor(Number(q) || 0));
+  } else if (Object.keys(map).length) {
     for (const [loc, dc] of Object.entries(map)) if (dc) out[dc] = (out[dc] ?? 0) + Math.max(0, byLoc[loc] ?? 0);
     for (const [loc, q] of Object.entries(byLoc)) if (!loc.startsWith('gid://shopify/Location/')) out[dcs[0].id] = (out[dcs[0].id] ?? 0) + Math.max(0, q);
   }
   // no location mapping (or this SKU has no stock rows at mapped locations): all Shopify stock goes to the first DC
-  if (!Object.keys(out).length) out[dcs[0].id] = Math.max(0, v.inventory ?? 0);
+  if (!Object.keys(out).length && !(fixed && Object.keys(fixed).length)) out[dcs[0].id] = Math.max(0, v.inventory ?? 0);
   // safety stock + open-order reservation are taken from the largest DC first
   let deduct = sync.safetyStock;
   if (sync.reserveOpenOrders && v.sku) deduct += (await reservedBySku()).get(v.sku) ?? 0;
