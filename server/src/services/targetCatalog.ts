@@ -171,3 +171,42 @@ export async function fetchTargetForProduct(productId: string) {
   }
   return { fetched: ids.length };
 }
+
+/** Progress of "Copy Target data into the hub" (runs in the background, ~2 items / second). */
+export const adoptProgress = { running: false, total: 0, done: 0, copied: 0, fetched: 0, failed: 0, startedAt: null as Date | null, finishedAt: null as Date | null, lastError: null as string | null };
+
+/**
+ * For every linked existing item: make sure we have Target's full field list (the catalog list often has no
+ * fields, so each item is read on its own), then copy those values into the hub (once per item).
+ */
+export async function adoptAllTargetData(opts: { force?: boolean } = {}) {
+  if (adoptProgress.running) return adoptProgress;
+  const env = await getActiveEnv();
+  const rows = await db.select().from(schema.targetItems).where(and(eq(schema.targetItems.env, env), sql`${schema.targetItems.matchedProductId} IS NOT NULL`));
+  Object.assign(adoptProgress, { running: true, total: rows.length, done: 0, copied: 0, fetched: 0, failed: 0, startedAt: new Date(), finishedAt: null, lastError: null });
+  (async () => {
+    for (const t0 of rows) {
+      try {
+        let t = t0;
+        if (opts.force) {
+          // forget the earlier copy so Target's current data is copied again
+          if (t.relationshipType === 'VAP') await db.execute(sql`UPDATE products SET overrides = overrides - '_from_target' WHERE id = ${t.matchedProductId}`);
+          else if (t.matchedVariantId) await db.execute(sql`UPDATE variants SET overrides = overrides - '_from_target' WHERE id = ${t.matchedVariantId}`);
+        }
+        if (!((t.fields ?? []) as any[]).length || opts.force) {
+          await new Promise((r) => setTimeout(r, 400)); // stay well under Target's rate limit
+          const fresh = await T.getProduct(t.id);
+          await storeTargetProduct(fresh, env);
+          t = (await db.query.targetItems.findFirst({ where: eq(schema.targetItems.id, t.id) })) ?? t;
+          adoptProgress.fetched++;
+        }
+        if (await adoptTargetFields(t)) adoptProgress.copied++;
+      } catch (e: any) {
+        adoptProgress.failed++; adoptProgress.lastError = `${t0.externalId ?? t0.id}: ${e?.message ?? e}`;
+      }
+      adoptProgress.done++;
+    }
+    adoptProgress.running = false; adoptProgress.finishedAt = new Date();
+  })().catch((e) => { adoptProgress.running = false; adoptProgress.lastError = String(e?.message ?? e); });
+  return adoptProgress;
+}

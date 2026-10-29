@@ -6,6 +6,7 @@ import { getShopify, getSync } from '../lib/settings.js';
 import { shopifyGraphql } from '../shopify/client.js';
 import { unlistVariant } from '../services/items.js';
 import { enqueue } from '../services/sync.js';
+import { adoptAllTargetData, adoptProgress } from '../services/targetCatalog.js';
 
 const bad = (msg: string, code = 400) => Object.assign(new Error(msg), { statusCode: code });
 
@@ -75,6 +76,10 @@ export default async function (app: FastifyInstance) {
     }
     return r;
   });
+
+  // ---------- existing items: copy Target's data into the hub ----------
+  app.post('/api/target-catalog/adopt', async (req) => adoptAllTargetData({ force: !!(req.body as any)?.force }));
+  app.get('/api/target-catalog/adopt', async () => adoptProgress);
 
   // ---------- bulk actions on SKUs (Price & inventory page, product page) ----------
   /** Buffer = units held back from Target for these SKUs (empty/null = use the global buffer). */
