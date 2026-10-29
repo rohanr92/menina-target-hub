@@ -4,6 +4,7 @@ import { get, post, put, setUnauthorizedHandler } from './lib/api';
 import { Btn, useToast } from './components/ui';
 import Dashboard from './pages/Dashboard';
 import Settings from './pages/Settings';
+import GoLive from './pages/GoLive';
 import Taxonomy from './pages/Taxonomy';
 import ItemTypeDetail from './pages/ItemTypeDetail';
 import Products from './pages/Products';
@@ -91,7 +92,7 @@ const NAV: [string, [string, string][]][] = [
   ['Overview', [['/', 'Dashboard'], ['/test-plan', 'Test plan']]],
   ['Catalog', [['/products', 'Products'], ['/bulk', 'Bulk mapping'], ['/target-catalog', 'Target catalog'], ['/taxonomy', 'Taxonomy & mapping'], ['/inventory', 'Price & inventory'], ['/listing-errors', 'Listing errors']]],
   ['Orders', [['/orders', 'Orders'], ['/returns', 'Returns']]],
-  ['Tools', [['/reports', 'Reports'], ['/console', 'API console'], ['/logs', 'API log'], ['/settings', 'Settings']]],
+  ['Tools', [['/reports', 'Reports'], ['/console', 'API console'], ['/logs', 'API log'], ['/settings', 'Settings'], ['/go-live', 'Go live']]],
 ];
 
 export default function App() {
@@ -141,6 +142,7 @@ export default function App() {
             <Route path="/console" element={<Console />} />
             <Route path="/logs" element={<Logs />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/go-live" element={<GoLive />} />
             <Route path="*" element={<Navigate to="/" />} />
           </Routes>
         </main>
