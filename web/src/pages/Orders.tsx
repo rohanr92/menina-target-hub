@@ -13,7 +13,7 @@ export default function Orders() {
   return (
     <div className="page">
       <PageHead title="Orders" sub="New orders arrive as RELEASED_FOR_SHIPMENT. Acknowledge quickly, ship or cancel at line level with a Target shipping method, and send tracking for every line.">
-        <Btn busy={busy === 'import'} onClick={() => run('import', () => post('/api/orders/import'), (r: any) => `${r.imported} orders loaded`).then(list.reload)}>Load all orders</Btn>
+        <Btn busy={busy === 'import'} onClick={() => run('import', () => post('/api/orders/import'), (r: any) => `${r.imported} orders loaded${r.perStatus ? ' · ' + Object.entries(r.perStatus).map(([k, v]) => `${k.toLowerCase()}: ${v}`).join(', ') : ''}`).then(list.reload)}>Load all orders</Btn>
         <Btn kind="primary" busy={busy === 'poll'} onClick={() => run('poll', () => post('/api/orders/poll'), (r: any) => `${r.released} released · ${r.created} new · ${r.acknowledged} acknowledged`).then(list.reload)}>Pull new orders</Btn>
       </PageHead>
       <div className="row between">

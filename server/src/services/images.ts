@@ -96,6 +96,12 @@ export async function pushImages(productId: string, opts: { colors?: string[] } 
     if (!urls?.length) { results.push({ sku: v.sku, color, action: 'skipped', reason: 'no images chosen for this color' }); continue; }
     try {
       const cur = await T.getProduct(v.targetProductId); // fresh copy: never send stale fields back
+      // never touch items you unlisted: any update creates a new version, which could list the size again
+      const st = (cur.product_statuses ?? []).find((x: any) => x.latest) ?? (cur.product_statuses ?? []).find((x: any) => x.current);
+      const cs = (cur.product_statuses ?? []).find((x: any) => x.current);
+      if ([st?.listing_status, cs?.listing_status].includes('UNLISTED') || v.listingStatus === 'UNLISTED') {
+        results.push({ sku: v.sku, color, action: 'skipped', reason: 'unlisted on Target (kept unlisted)' }); continue;
+      }
       const fields = withImages(cur.fields ?? [], urls, cur.relationship_type ?? 'VC');
       const r = await T.updateProduct(v.targetProductId, { external_id: cur.external_id, relationship_type: cur.relationship_type, fields });
       await storeTargetProduct({ ...cur, ...r, id: r?.id ?? v.targetProductId, fields });

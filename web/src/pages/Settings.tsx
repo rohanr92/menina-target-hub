@@ -68,6 +68,22 @@ function TargetEnvForm({ env, s, oauthCallbackUrl, reload }: { env: 'stage' | 'p
   );
 }
 
+/** Instant stock / price sync: Shopify calls the hub the moment stock or a product changes. */
+function WebhookBox() {
+  const w = useLoad(() => get('/api/shopify/webhooks'));
+  const { busy, run } = useAction();
+  const d: any = w.data;
+  return (
+    <div className="small" style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 10 }}>
+      <strong>Instant sync (webhooks)</strong>{' '}
+      {w.error ? <span className="bad">{w.error}</span> : !d ? <span className="muted">checking…</span>
+        : !d.missing?.length ? <span className="ok">on: stock and price changes in Shopify are sent to Target within seconds</span>
+        : <span className="warn">off ({d.missing.join(', ')} not registered){!d.hasSecret ? ' · paste the app client secret above and Save first' : ''}</span>}
+      <div style={{ marginTop: 6 }}><Btn size="sm" busy={busy === 'wh'} onClick={() => run('wh', () => post('/api/shopify/webhooks/register'), (r: any) => r.results.map((x: any) => `${x.topic}: ${x.status}`).join(' · ')).then(w.reload)}>Turn on instant sync</Btn></div>
+    </div>
+  );
+}
+
 function ShopifyForm({ s, reload }: { s: any; reload: () => void }) {
   const sh = s.shopify;
   const [f, setF] = useState<any>({ shopDomain: sh.shopDomain, accessToken: KEEP, apiVersion: sh.apiVersion, webhookSecret: KEEP, importQuery: sh.importQuery });
@@ -86,6 +102,7 @@ function ShopifyForm({ s, reload }: { s: any; reload: () => void }) {
           <Field label="Import filter (Shopify search syntax)" hint={'e.g. status:active  ·  vendor:"Menina Step"  ·  tag:target'}><input value={f.importQuery} onChange={(e) => set('importQuery', e.target.value)} /></Field>
           <Secret label="Webhook signing secret (optional)" has={sh.hasWebhookSecret} value={f.webhookSecret} onChange={(v) => set('webhookSecret', v)} hint="App client secret. Enables near-real-time stock updates via webhooks." />
           <div className="small muted">Webhook URL (topics: inventory_levels/update, products/update): <code>{sh.webhookUrl}</code> <Copy text={sh.webhookUrl} /></div>
+          <WebhookBox />
           <div className="row">
             <Btn kind="primary" busy={busy === 'save'} onClick={() => run('save', () => put('/api/settings/shopify', f), 'Saved').then(reload)}>Save</Btn>
             <Btn busy={busy === 'test'} onClick={() => run('test', async () => { const r = await post('/api/settings/shopify/test'); setLocations(r.locations); return r; }, (r: any) => `Connected to ${r.shop.name}`)}>Test & load locations</Btn>
@@ -155,6 +172,9 @@ function SyncForm({ s, reload }: { s: any; reload: () => void }) {
             {chk('pushOrdersToShopify', 'Create Target orders in Shopify (recommended: stock decrements there)')}
             {!f.pushOrdersToShopify && chk('deductShopifyStock', 'Otherwise deduct sold units from Shopify stock')}
             {chk('syncTrackingFromShopify', 'Send Shopify tracking to Target')}
+            {chk('returnsToShopify', 'Target returns: refund + tag “Target return” on the Shopify order')}
+            {f.returnsToShopify && chk('restockReturns', 'Put returned units back in Shopify stock')}
+            <div className="small muted">Orders before {f.ordersCutoverAt ? dt(f.ordersCutoverAt) : 'the moment you turn on order pulling'} belong to the old integration: they are shown, never created in Shopify again.</div>
             <hr style={{ margin: '4px 0' }} />
             {chk('inventoryEnabled', 'Sync inventory to Target')}
             {chk('priceEnabled', 'Sync prices to Target')}
@@ -165,7 +185,7 @@ function SyncForm({ s, reload }: { s: any; reload: () => void }) {
         </Card>
         <Card title="Inventory & price rules">
           <div className="stack">
-            <Field label="Safety stock (units held back per item)"><input type="number" value={f.safetyStock} onChange={(e) => set('safetyStock', Number(e.target.value))} /></Field>
+            <Field label="Buffer for all items (units held back per SKU, usually 0)" hint="Per-SKU buffer: Price & inventory › select SKUs › Buffer"><input type="number" value={f.safetyStock} onChange={(e) => set('safetyStock', Number(e.target.value))} /></Field>
             <Field label="Max quantity per item (optional)"><input type="number" value={f.maxQtyPerItem ?? ''} onChange={(e) => set('maxQtyPerItem', e.target.value === '' ? null : Number(e.target.value))} /></Field>
             {chk('reserveOpenOrders', 'Hold back stock for open Target orders not yet in Shopify')}
             <Field label="List price from"><select value={f.price.listFrom} onChange={(e) => set('price.listFrom', e.target.value)}><option value="compare_at_or_price">Compare-at price (if higher), else price</option><option value="price">Price</option></select></Field>
@@ -198,6 +218,17 @@ function SyncForm({ s, reload }: { s: any; reload: () => void }) {
           <div className="grid2">
             <Field label="Audience word"><input value={f.titles.audience} onChange={(e) => set('titles.audience', e.target.value)} /></Field>
             <Field label="EU → US size chart" hint="EU=US, separated by commas"><input value={f.titles.sizeChart} onChange={(e) => set('titles.sizeChart', e.target.value)} /></Field>
+          </div>
+          <div className="row">
+            <Btn size="sm" busy={busy === 'learn'} onClick={() => run('learn', async () => {
+              const r = await post('/api/settings/learn-sizes', {});
+              if (!r.chart) throw new Error('No sizes found in your Target catalog. Fetch it first (Target catalog › 1 · Fetch from Target).');
+              const vals = Object.entries(r.sizeValues).map(([k, v]) => `${k} → ${v}`).join(', ');
+              if (!confirm(`Sizes on your existing Target items:\n\nSize chart: ${r.chart}\n\nSize values: ${vals || '-'}${r.conflicts.length ? `\n\nMixed on Target (most used is taken): ${r.conflicts.map((c: any) => c.eu).join(', ')}` : ''}\n\nUse these for NEW products?`)) return undefined as any;
+              await post('/api/settings/learn-sizes', { save: true });
+              return r;
+            }, (r: any) => (r ? 'Size chart saved from your Target items' : 'Not changed')).then(reload)}>Copy sizes from my Target items</Btn>
+            <span className="small muted">New products then get the same size text as your existing ones (e.g. 4 - 4.5 US / 35 EU)</span>
           </div>
           <span className="small">Example: <strong>Menina Step Women's Jimena High Laces French Laced Taupe 9 US / 39 EU</strong></span>
         </div>

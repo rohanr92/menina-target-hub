@@ -72,6 +72,7 @@ export default async function (app: FastifyInstance) {
     for (const t of errs) if (t.variantId && !lastTask.has(t.variantId)) lastTask.set(t.variantId, t);
     let planError: string | null = null;
     const rows: any[] = [];
+    const titles = new Map((vs.length ? await db.select({ id: schema.products.id, title: schema.products.title }).from(schema.products).where(inArray(schema.products.id, [...new Set(vs.map((v) => v.productId))])) : []).map((p) => [p.id, p.title]));
     for (const v of vs) {
       let want: Record<string, number> | null = null;
       if (dcs.length && !planError) { try { want = await desiredQuantities(v); } catch (e: any) { planError = e?.message ?? String(e); } }
@@ -81,6 +82,8 @@ export default async function (app: FastifyInstance) {
         shopify: v.inventory, byLoc: v.inventoryByLoc, want, sent: v.lastQtySent ?? {}, sentAt: v.lastQtySentAt,
         shopifyPrice: v.price, compareAtPrice: v.compareAtPrice, priceSent: v.lastPriceSent ?? null, priceSentAt: v.lastPriceSentAt,
         stockFixed: (v.overrides as any)?.fixed_qty ?? null,
+        buffer: (v.overrides as any)?._buffer ?? null, disabled: !!(v.overrides as any)?._disabled, priceRule: (v.overrides as any)?._price_rule ?? null,
+        title: titles.get(v.productId) ?? '', options: v.options ?? {}, listingStatus: v.listingStatus,
         priceOverride: (v.overrides as any)?.list_price ? { list_price: (v.overrides as any).list_price, offer_price: (v.overrides as any).offer_price ?? null, map_price: (v.overrides as any).map_price ?? null } : null,
         task: t ? { status: t.status, error: t.lastError, result: t.result, at: t.updatedAt } : null,
       });
@@ -141,7 +144,7 @@ export default async function (app: FastifyInstance) {
   app.post('/api/sync/auto', async (req) => {
     const { on } = (req.body ?? {}) as { on?: boolean };
     const cur = await getSetting<any>('sync', {});
-    await setSetting('sync', { ...cur, inventoryEnabled: on !== false, priceEnabled: on !== false });
+    await setSetting('sync', { ...cur, inventoryEnabled: on !== false }); // prices are switched separately (Settings › Sync & rules)
     return { ok: true, on: on !== false };
   });
 
@@ -212,12 +215,21 @@ export default async function (app: FastifyInstance) {
     // pull orders in any status (e.g. to load test orders already acknowledged elsewhere)
     const { status } = (req.body ?? {}) as { status?: string };
     // one call per status (works whether or not Target accepts a comma list), then refresh every order we know
+    // safety: older orders were handled by the old integration, never create them in Shopify again
+    const sync = await getSync();
+    if (!sync.ordersCutoverAt && (await getActiveEnv()) === 'production') await setSetting('sync', { ...(await getSetting<any>('sync', {})), ordersCutoverAt: new Date().toISOString() });
     const statuses = status ? [status] : ['RELEASED_FOR_SHIPMENT', 'ACKNOWLEDGED_BY_SELLER', 'PARTIALLY_SHIPPED', 'SHIPPED', 'CANCELED'];
     const ids = new Set<string>();
-    for (const st of statuses) for (const o of await T.listOrders({ order_status: st }).catch(() => [])) ids.add(String(o.id));
+    const perStatus: Record<string, number | string> = {};
+    const add = (list: any[]) => { for (const o of list) ids.add(String(o.id)); return list.length; };
+    for (const st of statuses) {
+      try { perStatus[st] = add(await T.listOrders({ order_status: st })); } catch (e: any) { perStatus[st] = `error: ${e?.message ?? e}`; }
+    }
+    if (!status) { try { perStatus.ALL = add(await T.listOrders({})); } catch (e: any) { perStatus.ALL = `error: ${e?.message ?? e}`; } }
     for (const o of await db.select({ id: schema.orders.id }).from(schema.orders)) ids.add(o.id);
-    for (const id of ids) await O.refreshOrder(id).catch(() => undefined);
-    return { imported: ids.size };
+    let failed = 0;
+    for (const id of ids) await O.refreshOrder(id).catch(() => { failed++; });
+    return { imported: ids.size - failed, failed, perStatus };
   });
   app.post('/api/orders/:id/refresh', async (req) => O.refreshOrder((req.params as any).id));
   app.post('/api/orders/:id/acknowledge', async (req) => O.acknowledge((req.params as any).id));

@@ -55,6 +55,12 @@ export interface SyncSettings {
   safetyStock: number;
   maxQtyPerItem: number | null;
   reserveOpenOrders: boolean;
+  /** orders dated before this moment were handled by the old integration: never created in Shopify, never reserve stock */
+  ordersCutoverAt: string | null;
+  /** Target returns: refund the hub-created Shopify order (and tag it) */
+  returnsToShopify: boolean;
+  /** put returned units back in Shopify stock when refunding */
+  restockReturns: boolean;
   price: {
     listFrom: 'compare_at_or_price' | 'price';
     offerFrom: 'price' | 'none';
@@ -68,6 +74,8 @@ export interface SyncSettings {
   parentSkuPattern: string; // template for VAP external_id
   /** Target title rules. Tokens: {brand} {audience} {name} {color} {size} {us} {eu}; [ … ] = left out when a token inside is empty */
   titles: { child: string; standalone: string; parent: string; audience: string; sizeChart: string };
+  /** Shopify size value -> value sent as child_variations.size (learned from your existing Target items) */
+  sizeValues: Record<string, string>;
 }
 
 export const defaultSync: SyncSettings = {
@@ -85,11 +93,15 @@ export const defaultSync: SyncSettings = {
   safetyStock: 0,
   maxQtyPerItem: null,
   reserveOpenOrders: true,
+  ordersCutoverAt: null,
+  returnsToShopify: true,
+  restockReturns: false,
   price: { listFrom: 'compare_at_or_price', offerFrom: 'price', mapFrom: 'none', multiplier: 1, roundTo99: false },
   stage: { forceBrand: 'Valor Fitness', useMockBarcodes: true, allowShopifyWrites: false },
   defaultLogistics: { is_add_on: 'No', two_day_shipping_eligible: 'No', shipping_exclusion: 'No', seller_return_policy: '' },
   carrierMap: { ups: 'UPSGround', fedex: 'FedExGround', usps: 'USPSGroundAdvantage' },
   parentSkuPattern: 'VAP-{handle}',
+  sizeValues: {},
   titles: {
     child: '{brand} {audience} {name} {color}[ {us} US / {eu} EU]',
     standalone: '{brand} {audience} {name}[ {color}][ {us} US / {eu} EU]',

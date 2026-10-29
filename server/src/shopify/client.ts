@@ -124,6 +124,26 @@ mutation InventoryAdjust($input: InventoryAdjustQuantitiesInput!) {
 
 export const ORDER_BY_TAG = `query OrderByTag($q: String!) { orders(first: 1, query: $q) { nodes { id name } } }`;
 
+export const VARIANT_LOOKUP = `query VariantLookup($q: String!) { productVariants(first: 10, query: $q) { nodes { id sku barcode product { id } } } }`;
+
+export const ORDER_LINES_QUERY = `
+query OrderLines($id: ID!) {
+  order(id: $id) {
+    id name tags
+    lineItems(first: 100) { nodes { id quantity refundableQuantity sku variant { id } } }
+  }
+}`;
+
+export const REFUND_CREATE = `
+mutation RefundCreate($input: RefundInput!) {
+  refundCreate(input: $input) {
+    refund { id }
+    userErrors { field message }
+  }
+}`;
+
+export const TAGS_ADD = `mutation TagsAdd($id: ID!, $tags: [String!]!) { tagsAdd(id: $id, tags: $tags) { userErrors { field message } } }`;
+
 export const VARIANT_BY_SKU = `query VariantBySku($q: String!) { productVariants(first: 5, query: $q) { nodes { id sku product { id } } } }`;
 
 export function availableAt(levels: any): Record<string, number> {

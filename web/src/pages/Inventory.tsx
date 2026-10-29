@@ -52,6 +52,8 @@ export default function Inventory() {
 }
 
 function StockCard({ stock, sel, setSel, onlyProblems, setOnlyProblems, busy, run, reload }: any) {
+  const [q, setQ] = useState('');
+  const [bulkPrice, setBulkPrice] = useState(false);
   const d = stock.data;
   if (stock.loading && !d) return <Card title="Stock on Target"><Loading /></Card>;
   if (!d) return null;
@@ -59,9 +61,15 @@ function StockCard({ stock, sel, setSel, onlyProblems, setOnlyProblems, busy, ru
   const mapped = Object.keys(d.locationMap ?? {}).length;
   const rowsAll: any[] = d.rows;
   const problem = (r: any) => r.task?.status === 'failed' || !r.sentAt || (r.want && Object.entries(r.want).some(([dc, q]) => (r.sent ?? {})[dc] !== q));
-  const rows = onlyProblems ? rowsAll.filter(problem) : rowsAll;
+  // search: SKU, TCIN, product title, or any option value ("38", "Black") — words must all match
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const hay = (r: any) => [r.sku, r.tcin, r.title, ...Object.values(r.options ?? {})].filter(Boolean).join(' ').toLowerCase();
+  const optHit = (r: any, w: string) => Object.values(r.options ?? {}).some((x: any) => String(x).toLowerCase() === w);
+  const rows = rowsAll.filter((r) => (!onlyProblems || problem(r)) && words.every((w) => optHit(r, w) || hay(r).includes(w)));
   const [priceFor, setPriceFor] = useState<any>(null);
   const [stockFor, setStockFor] = useState<any>(null);
+  const ids = [...sel];
+  const bulk = (key: string, path: string, body: any, msg: (r: any) => string) => run(key, () => post(path, { variantIds: ids, ...body }), msg).then(() => setTimeout(reload, 2500));
   const toggle = (id: string) => { const n = new Set(sel); n.has(id) ? n.delete(id) : n.add(id); setSel(n); };
   const send = (ids?: string[]) => run('send', () => post('/api/sync/stock/send', { variantIds: ids }), (r: any) => `Sending stock for ${r.queued} SKU(s). Refresh in a few seconds.`).then(() => setTimeout(reload, 4000));
   return (
@@ -71,6 +79,20 @@ function StockCard({ stock, sel, setSel, onlyProblems, setOnlyProblems, busy, ru
       <Btn size="sm" kind="primary" busy={busy === 'send'} onClick={() => send()}>Send stock now (all)</Btn>
       <Btn size="sm" kind="ghost" onClick={reload}>Refresh</Btn>
     </>}>
+      <div className="card-b" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', borderBottom: '1px solid #eee' }}>
+        <input placeholder="Search SKU, TCIN, product, size (38), color…" value={q} onChange={(e) => setQ(e.target.value)} style={{ width: 300 }} />
+        <span className="small muted">{rows.length} shown</span>
+        <Btn size="sm" kind="ghost" onClick={() => setSel(new Set(rows.map((r) => r.variantId)))}>Select shown</Btn>
+        {sel.size > 0 && <>
+          <strong className="small">{sel.size} selected:</strong>
+          <Btn size="sm" busy={busy === 'buf'} onClick={() => { const v = prompt('Buffer for the selected SKUs (units held back from Target). Leave empty to use the global buffer.', ''); if (v === null) return; bulk('buf', '/api/bulk/buffer', { buffer: v.trim() === '' ? null : Number(v) }, (r) => `Buffer ${r.buffer ?? 'global'} set on ${r.updated} SKU(s)`); }}>Buffer</Btn>
+          <Btn size="sm" onClick={() => setBulkPrice(true)}>Price rule</Btn>
+          <Btn size="sm" busy={busy === 'dis'} onClick={() => confirm(`Stop selling ${sel.size} SKU(s) on Target? Stock 0 is sent; the listing stays.`) && bulk('dis', '/api/bulk/disable', { disabled: true }, (r) => `${r.updated} SKU(s) disabled (stock 0)`)}>Disable</Btn>
+          <Btn size="sm" busy={busy === 'en'} onClick={() => bulk('en', '/api/bulk/disable', { disabled: false }, (r) => `${r.updated} SKU(s) selling again`)}>Enable</Btn>
+          <Btn size="sm" kind="danger" busy={busy === 'unl'} onClick={() => confirm(`Unlist ${sel.size} SKU(s) on Target? (Only approved items can be unlisted.)`) && bulk('unl', '/api/bulk/unlist', {}, (r) => `${r.unlisted} unlisted${r.failed ? ` · ${r.failed} failed: ${r.results.filter((x: any) => !x.ok).slice(0, 3).map((x: any) => `${x.sku} (${x.error})`).join(', ')}` : ''}`)}>Unlist</Btn>
+          <Btn size="sm" kind="ghost" onClick={() => setSel(new Set())}>Clear</Btn>
+        </>}
+      </div>
       <div className="card-b small" style={{ display: 'grid', gap: 6 }}>
         <div>
           Automatic sync: <strong className={d.inventoryEnabled ? '' : 'bad'}>{d.inventoryEnabled ? `on, checks Shopify every ${d.intervalMin} min` : 'off'}</strong>{' '}
@@ -93,7 +115,9 @@ function StockCard({ stock, sel, setSel, onlyProblems, setOnlyProblems, busy, ru
           {rows.map((r) => (
             <tr key={r.variantId}>
               <td><input type="checkbox" checked={sel.has(r.variantId)} onChange={() => toggle(r.variantId)} /></td>
-              <td><Link to={`/products/${r.productId}`}><code className="small">{r.sku}</code></Link>{!r.syncEnabled && <span className="muted small"> (sync off)</span>}</td>
+              <td><Link to={`/products/${r.productId}`}><code className="small">{r.sku}</code></Link>{!r.syncEnabled && <span className="muted small"> (sync off)</span>}
+                <div className="muted small">{r.title}{Object.values(r.options ?? {}).length ? ` · ${Object.values(r.options).join(' / ')}` : ''}</div>
+                <div className="small">{r.disabled && <span className="bad">disabled · </span>}{r.listingStatus === 'UNLISTED' && <span className="muted">unlisted · </span>}{r.buffer != null && <span className="warn">buffer {r.buffer} · </span>}{r.priceRule && <span>price {r.priceRule.mode === 'percent' ? `${r.priceRule.value > 0 ? '+' : ''}${r.priceRule.value}%` : `fixed ${r.priceRule.value}`}</span>}</div></td>
               <td className="small">{r.tcin ?? ''}</td>
               <td className="num">{r.shopify}</td>
               {dcs.map((x) => {
@@ -120,6 +144,7 @@ function StockCard({ stock, sel, setSel, onlyProblems, setOnlyProblems, busy, ru
         </tbody>
       </table></div>
       {stockFor && <StockModal row={stockFor} dcs={dcs} onClose={() => setStockFor(null)} onSaved={() => { setStockFor(null); setTimeout(reload, 4000); }} />}
+      {bulkPrice && <BulkPriceModal count={sel.size} onClose={() => setBulkPrice(false)} onApply={(body) => { setBulkPrice(false); bulk('pr', '/api/bulk/price-rule', body, (r) => `Price rule set on ${r.updated} SKU(s)${r.sent ? ', sending to Target' : ' (price sync is off, nothing sent yet)'}`); }} />}
       {priceFor && <PriceModal row={priceFor} onClose={() => setPriceFor(null)} onSaved={() => { setPriceFor(null); setTimeout(reload, 4000); }} />}
     </Card>
   );
@@ -158,6 +183,29 @@ function StockModal({ row, dcs, onClose, onSaved }: { row: any; dcs: { id: strin
       <div className="row" style={{ gap: 8, marginTop: 12 }}>
         <Btn kind="primary" busy={busy === 'save'} onClick={() => run('save', () => post(`/api/variants/${row.variantId}/set-stock`, { qty: q }), 'Stock saved and sent to Target').then((r) => r && onSaved())}>Save &amp; send to Target</Btn>
         {row.stockFixed && <Btn kind="ghost" busy={busy === 'clear'} onClick={() => run('clear', () => post(`/api/variants/${row.variantId}/set-stock`, { clear: true }), 'Back to Shopify stock').then((r) => r && onSaved())}>Use Shopify stock again</Btn>}
+      </div>
+    </Modal>
+  );
+}
+
+function BulkPriceModal({ count, onClose, onApply }: { count: number; onClose: () => void; onApply: (b: any) => void }) {
+  const [mode, setMode] = useState<'web' | 'percent' | 'fixed'>('web');
+  const [value, setValue] = useState('');
+  const [clearManual, setClearManual] = useState(true);
+  return (
+    <Modal title={`Price rule · ${count} SKU(s)`} onClose={onClose}>
+      <div className="stack">
+        <Field label="Target price">
+          <select value={mode} onChange={(e) => setMode(e.target.value as any)}>
+            <option value="web">Web price (Shopify price; compare-at = list, price = sale)</option>
+            <option value="percent">Web price + / − percent</option>
+            <option value="fixed">Fixed price</option>
+          </select>
+        </Field>
+        {mode !== 'web' && <Field label={mode === 'percent' ? 'Percent (10 = +10%, -15 = −15%)' : 'Price (USD)'}><input type="number" step="0.01" value={value} onChange={(e) => setValue(e.target.value)} /></Field>}
+        <label className="inline-check"><input type="checkbox" checked={clearManual} onChange={(e) => setClearManual(e.target.checked)} /> Also remove prices set by hand (“Set price”) on these SKUs</label>
+        <div className="small muted">Target rules are kept: sale price is always below the list price, MAP never above list. Web price changes in Shopify are picked up right away when instant sync is on.</div>
+        <div className="row"><Btn kind="primary" disabled={mode !== 'web' && value === ''} onClick={() => onApply({ mode, value: Number(value), clearManual })}>Apply</Btn><Btn kind="ghost" onClick={onClose}>Cancel</Btn></div>
       </div>
     </Modal>
   );

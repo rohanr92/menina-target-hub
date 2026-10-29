@@ -4,13 +4,57 @@ import { and, eq, inArray, isNotNull, isNull } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { getActiveEnv, getShopify, getSync } from '../lib/settings.js';
 import {
-  INVENTORY_ADJUST, ORDER_BY_TAG, ORDER_CREATE, ORDER_FULFILLMENTS_QUERY, shopifyGraphql, VARIANT_BY_SKU,
+  INVENTORY_ADJUST, ORDER_BY_TAG, ORDER_CREATE, ORDER_FULFILLMENTS_QUERY, ORDER_LINES_QUERY, REFUND_CREATE, shopifyGraphql, TAGS_ADD, VARIANT_LOOKUP,
 } from '../shopify/client.js';
+import { getSetting, setSetting } from '../lib/settings.js';
 import * as T from '../target/api.js';
 import { enqueue } from './sync.js';
 
 const OPEN = ['RELEASED_FOR_SHIPMENT', 'ACKNOWLEDGED_BY_SELLER', 'PARTIALLY_SHIPPED'];
 const errMsg = (e: any) => e?.message ?? String(e);
+
+type Variant = typeof schema.variants.$inferSelect;
+/**
+ * Which Shopify variant is this Target order line? UPC first, then SKU, then the item linked to the TCIN.
+ * (Items listed by the old app have SKUs like "#shop-…", so UPC matching is what normally hits.)
+ */
+export async function resolveLineVariant(l: any): Promise<{ gid?: string; local?: Variant; by?: string; barcode?: string }> {
+  const env = await getActiveEnv();
+  const tItem = l.tcin ? await db.query.targetItems.findFirst({ where: and(eq(schema.targetItems.env, env), eq(schema.targetItems.tcin, String(l.tcin))) }) : null;
+  const linked = l.tcin ? await db.query.variants.findFirst({ where: eq(schema.variants.tcin, String(l.tcin)) }) : null;
+  const barcode = (tItem?.barcode || l.barcode || linked?.barcode || '').trim();
+  const isGid = (v?: Variant | null) => !!v?.sourceId?.startsWith('gid://shopify/ProductVariant/');
+  if (barcode) {
+    const local = await db.query.variants.findFirst({ where: eq(schema.variants.barcode, barcode) });
+    if (isGid(local)) return { gid: local!.sourceId, local: local!, by: 'upc', barcode };
+    const d: any = await shopifyGraphql(VARIANT_LOOKUP, { q: `barcode:${JSON.stringify(barcode)}` }, 'shopify-order');
+    const hit = d.productVariants.nodes.find((n: any) => n.barcode === barcode);
+    if (hit) return { gid: hit.id, local: (await db.query.variants.findFirst({ where: eq(schema.variants.sourceId, hit.id) })) ?? undefined, by: 'upc', barcode };
+  }
+  const sku = l.external_id ? String(l.external_id) : '';
+  if (sku && !sku.startsWith('#shop-')) {
+    const local = await db.query.variants.findFirst({ where: eq(schema.variants.sku, sku) });
+    if (isGid(local)) return { gid: local!.sourceId, local: local!, by: 'sku', barcode };
+    const d: any = await shopifyGraphql(VARIANT_LOOKUP, { q: `sku:${JSON.stringify(sku)}` }, 'shopify-order');
+    const hit = d.productVariants.nodes.find((n: any) => n.sku === sku);
+    if (hit) return { gid: hit.id, local: (await db.query.variants.findFirst({ where: eq(schema.variants.sourceId, hit.id) })) ?? undefined, by: 'sku', barcode };
+  }
+  // old-app SKUs "#shop-<variant id>" carry the Shopify variant id itself
+  const m = sku.match(/^#shop-(\d+)$/);
+  if (m) {
+    const gid = `gid://shopify/ProductVariant/${m[1]}`;
+    const local = await db.query.variants.findFirst({ where: eq(schema.variants.sourceId, gid) });
+    if (local) return { gid, local, by: 'shopify id', barcode };
+  }
+  if (isGid(linked)) return { gid: linked!.sourceId, local: linked!, by: 'tcin', barcode };
+  return { barcode };
+}
+
+/** Orders dated before the switch to the hub were handled by the old integration. */
+async function beforeCutover(o: { orderDate: Date | null }) {
+  const { ordersCutoverAt } = await getSync();
+  return !!(ordersCutoverAt && o.orderDate && o.orderDate.getTime() < new Date(ordersCutoverAt).getTime());
+}
 
 async function upsertOrder(o: any) {
   const row = {
@@ -49,6 +93,7 @@ async function reflectInShopify(orderId: string) {
   if (!(await shopifyWritesAllowed())) return;
   const o = await db.query.orders.findFirst({ where: eq(schema.orders.id, orderId) });
   if (!o || o.shopifyOrderId) return;
+  if (await beforeCutover(o)) return;
   if (sync.pushOrdersToShopify) await pushOrderToShopify(orderId);
   else if (sync.deductShopifyStock) await adjustShopifyStock(orderId);
 }
@@ -64,11 +109,12 @@ export async function adjustShopifyStock(orderId: string) {
   const raw: any = o.raw;
   const adjusted = { ...((o.shopifyStockAdjusted ?? {}) as Record<string, number>) };
   const bySku = new Map<string, number>();
-  for (const l of raw.order_lines ?? []) if (l.external_id) bySku.set(l.external_id, (bySku.get(l.external_id) ?? 0) + soldQty(l));
+  const lineOf = new Map<string, any>();
+  for (const l of raw.order_lines ?? []) if (l.external_id) { bySku.set(l.external_id, (bySku.get(l.external_id) ?? 0) + soldQty(l)); lineOf.set(l.external_id, l); }
   for (const [sku, sold] of bySku) {
     const delta = sold - (adjusted[sku] ?? 0); // >0: deduct more, <0: give back (cancellation)
     if (!delta) continue;
-    const v = await db.query.variants.findFirst({ where: eq(schema.variants.sku, sku) });
+    const v = (await resolveLineVariant(lineOf.get(sku))).local;
     if (!v?.inventoryItemId) continue;
     // location: the one mapped to the order's DC, else the mapped location with most stock, else most stock overall
     const byLoc = (v.inventoryByLoc ?? {}) as Record<string, number>;
@@ -264,10 +310,11 @@ export async function shipAndCancelRest(orderId: string, lines: ShipLine[], reas
 
 async function requeueInventoryForOrder(orderId: string) {
   const order = await db.query.orders.findFirst({ where: eq(schema.orders.id, orderId) });
-  const skus = ((order?.raw as any)?.order_lines ?? []).map((l: any) => l.external_id).filter(Boolean);
-  if (!skus.length) return;
-  const vs = await db.select({ id: schema.variants.id }).from(schema.variants).where(and(inArray(schema.variants.sku, skus), isNotNull(schema.variants.targetProductId)));
-  for (const v of vs) await enqueue('inventory', v.id);
+  for (const l of (order?.raw as any)?.order_lines ?? []) {
+    const v = (await resolveLineVariant(l).catch(() => ({} as any))).local as Variant | undefined;
+    const target = v?.targetProductId ? v : l.tcin ? await db.query.variants.findFirst({ where: eq(schema.variants.tcin, String(l.tcin)) }) : null;
+    if (target?.targetProductId) await enqueue('inventory', target.id);
+  }
 }
 
 const pushing = new Set<string>();
@@ -299,15 +346,10 @@ export async function pushOrderToShopify(orderId: string) {
     for (const l of raw.order_lines ?? []) {
       const q = soldQty(l);
       if (!q) continue;
-      let variantGid: string | undefined;
-      const local = l.external_id ? await db.query.variants.findFirst({ where: eq(schema.variants.sku, l.external_id) }) : null;
-      if (local?.sourceId?.startsWith('gid://shopify/ProductVariant/')) variantGid = local.sourceId;
-      if (!variantGid && l.external_id) {
-        const d: any = await shopifyGraphql(VARIANT_BY_SKU, { q: `sku:${JSON.stringify(l.external_id)}` }, 'shopify-order');
-        variantGid = d.productVariants.nodes.find((n: any) => n.sku === l.external_id)?.id;
-      }
+      const r = await resolveLineVariant(l);
+      if (!r.gid) throw new Error(`Line ${l.order_line_number}: no Shopify variant found for UPC ${r.barcode || '-'} / SKU ${l.external_id ?? '-'} / TCIN ${l.tcin ?? '-'}. Not created, so stock is not mixed up.`);
       lineItems.push({
-        ...(variantGid ? { variantId: variantGid } : { title: `Target item ${l.external_id ?? l.tcin}`, sku: l.external_id }),
+        variantId: r.gid,
         quantity: q,
         priceSet: { shopMoney: { amount: String(l.unit_price ?? 0), currencyCode: raw.currency || 'USD' } },
       });
@@ -319,7 +361,7 @@ export async function pushOrderToShopify(orderId: string) {
         poNumber: raw.order_number,
         sourceName: 'Target Plus',
         sourceIdentifier: String(order.id),
-        tags: ['Target Plus', tag],
+        tags: ['Target Plus', 'Target', tag],
         note: `Target Plus order ${raw.order_number} (id ${order.id}). Ship by ${raw.requested_shipment_date ?? '-'}, deliver by ${raw.requested_delivery_date ?? '-'}.`,
         financialStatus: 'PAID',
         currency: raw.currency || 'USD',
@@ -367,8 +409,11 @@ export async function syncTrackingFromShopify() {
         if (!method) throw new Error(`No Target shipping method mapped for carrier "${t.company}". Set it in Settings › Sync & rules.`);
         const fresh = await refreshOrder(o.id);
         const lines: ShipLine[] = [];
+        const targetLines: any[] = (fresh!.raw as any).order_lines ?? [];
+        const gidOf = new Map<string, string | undefined>();
+        for (const l of targetLines) gidOf.set(l.order_line_number, (await resolveLineVariant(l).catch(() => ({} as any))).gid);
         for (const fl of f.fulfillmentLineItems?.nodes ?? []) {
-          const line = ((fresh!.raw as any).order_lines ?? []).find((l: any) => l.external_id && l.external_id === fl.lineItem?.sku);
+          const line = targetLines.find((l: any) => (fl.lineItem?.variant?.id && gidOf.get(l.order_line_number) === fl.lineItem.variant.id) || (l.external_id && l.external_id === fl.lineItem?.sku));
           if (!line) continue;
           const q = Math.min(openQty(line), fl.quantity);
           if (q > 0) lines.push({ order_line_number: line.order_line_number, quantity: q, tracking_number: t.number, shipping_method: method.shippingMethod, shipped_date: f.createdAt });
@@ -386,3 +431,54 @@ export async function syncTrackingFromShopify() {
   return { ordersChecked: open.length, fulfillmentsSent: sent, failed };
 }
 
+
+/**
+ * Target returns → Shopify: refund the returned units on the Shopify order the hub created and tag it
+ * "Target return". Money is handled by Target; Shopify gets the refund record (and the units back in stock
+ * when "restock returns" is on). Each Target return is processed once.
+ */
+export async function syncReturnsToShopify() {
+  const sync = await getSync();
+  if (!sync.returnsToShopify || !(await shopifyWritesAllowed())) return { skipped: true };
+  const done = new Set(await getSetting<string[]>('returns.processed', []));
+  const returns: any[] = await T.listReturns({}).catch(() => []);
+  const shop = await getShopify();
+  const restockLoc = Object.keys(shop.locationMap ?? {}).find((k) => k.startsWith('gid://shopify/Location/') && (shop.locationMap as any)[k]);
+  let refunded = 0, failed = 0;
+  for (const r of returns) {
+    const rid = String(r.id ?? r.reference_id ?? '');
+    if (!rid || done.has(rid)) continue;
+    const order = r.order_id ? await db.query.orders.findFirst({ where: eq(schema.orders.id, String(r.order_id)) })
+      : r.order_number ? await db.query.orders.findFirst({ where: eq(schema.orders.orderNumber, String(r.order_number)) }) : null;
+    if (!order) continue; // not an order the hub knows (older than the hub)
+    if (!order.shopifyOrderId) { if (await beforeCutover(order)) done.add(rid); continue; }
+    try {
+      const line = ((order.raw as any)?.order_lines ?? []).find((l: any) => (r.tcin && String(l.tcin) === String(r.tcin)) || (r.external_id && l.external_id === r.external_id));
+      if (!line) throw new Error(`return ${rid}: no matching line on order ${order.id}`);
+      const gid = (await resolveLineVariant(line)).gid;
+      const d: any = await shopifyGraphql(ORDER_LINES_QUERY, { id: order.shopifyOrderId }, 'shopify-return');
+      const li = (d.order?.lineItems?.nodes ?? []).find((x: any) => x.variant?.id === gid || (line.external_id && x.sku === line.external_id));
+      if (!li) throw new Error(`return ${rid}: line not found in Shopify order ${order.shopifyOrderName}`);
+      const qty = Math.min(Number(r.quantity || 1), li.refundableQuantity ?? li.quantity);
+      if (qty > 0) {
+        const restock = sync.restockReturns && restockLoc;
+        const res: any = await shopifyGraphql(REFUND_CREATE, {
+          input: {
+            orderId: order.shopifyOrderId, notify: false,
+            note: `Target Plus return ${r.reference_id ?? rid} · ${r.return_reason ?? ''}`.trim(),
+            refundLineItems: [{ lineItemId: li.id, quantity: qty, restockType: restock ? 'RETURN' : 'NO_RESTOCK', ...(restock ? { locationId: restockLoc } : {}) }],
+          },
+        }, 'shopify-return');
+        const errs = res.refundCreate?.userErrors ?? [];
+        if (errs.length) throw new Error(errs.map((e: any) => e.message).join('; '));
+      }
+      await shopifyGraphql(TAGS_ADD, { id: order.shopifyOrderId, tags: ['Target return'] }, 'shopify-return');
+      done.add(rid); refunded++;
+    } catch (e) {
+      failed++;
+      await db.update(schema.orders).set({ lastError: errMsg(e) }).where(eq(schema.orders.id, order.id));
+    }
+  }
+  await setSetting('returns.processed', [...done].slice(-5000));
+  return { returns: returns.length, refunded, failed };
+}

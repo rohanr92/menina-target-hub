@@ -44,7 +44,7 @@ export default async function (app: FastifyInstance) {
         shopDomain: shop.shopDomain ?? '', accessToken: mask(shop.accessToken), hasAccessToken: !!shop.accessToken,
         apiVersion: shop.apiVersion ?? DEFAULT_SHOPIFY_API_VERSION, hasWebhookSecret: !!shop.webhookSecret,
         locationMap: shop.locationMap ?? {}, importQuery: shop.importQuery ?? 'status:active',
-        webhookUrl: `${env.publicUrl || `${req.protocol}://${req.headers.host}`}/api/webhooks/shopify`,
+        webhookUrl: `${env.publicUrl || `${/localhost|127\.0\.0\.1/.test(String(req.headers.host)) ? req.protocol : 'https'}://${req.headers.host}`}/api/webhooks/shopify`,
       },
       hub: { url: hub.url ?? '', hasToken: !!hub.token },
       sync: await getSync(),
@@ -214,6 +214,8 @@ export default async function (app: FastifyInstance) {
     next.ordersIntervalMin = Math.max(5, Number(next.ordersIntervalMin) || 15);
     next.statusIntervalMin = Math.max(5, Number(next.statusIntervalMin) || 15);
     next.safetyStock = Math.max(0, Number(next.safetyStock) || 0);
+    // first time orders are switched on in production: orders before this moment belong to the old integration
+    if (next.ordersEnabled && !cur.ordersEnabled && !next.ordersCutoverAt && (await getActiveEnv()) === 'production') next.ordersCutoverAt = new Date().toISOString();
     await setSetting('sync', next);
     return next;
   });

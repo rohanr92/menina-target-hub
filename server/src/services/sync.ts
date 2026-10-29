@@ -34,13 +34,17 @@ export async function enqueueMany(kind: TaskKind, variantIds: string[], opts: { 
  * neither created in Shopify nor deducted from Shopify stock. (Normally 0: new orders are pushed to Shopify
  * or deducted from Shopify stock as soon as they arrive. This covers the gap if that step failed.)
  */
+let reservedCache: { at: number; map: Map<string, number> } | null = null;
+/** Keyed by Target SKU (external_id) AND by TCIN, so items listed by the old app ("#shop-…" SKUs) match too. */
 export async function reservedBySku(): Promise<Map<string, number>> {
+  if (reservedCache && Date.now() - reservedCache.at < 5000) return reservedCache.map;
+  const sync = await getSync();
   const recent = await db.select().from(schema.orders).where(and(
     inArray(schema.orders.status, ['RELEASED_FOR_SHIPMENT', 'ACKNOWLEDGED_BY_SELLER', 'PARTIALLY_SHIPPED', 'SHIPPED']),
     sql`${schema.orders.orderDate} > now() - interval '30 days'`,
+    sync.ordersCutoverAt ? sql`${schema.orders.orderDate} >= ${sync.ordersCutoverAt}` : sql`true`,
   ));
   const out = new Map<string, number>();
-  const sync = await getSync();
   const { deductShopifyStock, pushOrdersToShopify } = sync;
   // Can Target sales reach Shopify at all? On stage (writes off) Shopify never hears about them, so shipped units
   // must stay deducted here, or Target would get the old stock back after a shipment.
@@ -56,9 +60,12 @@ export async function reservedBySku(): Promise<Map<string, number>> {
     for (const line of (o.raw as any)?.order_lines ?? []) {
       const sold = (line.order_line_statuses ?? []).filter((s: any) => counted.includes(s.status)).reduce((a: number, s: any) => a + Number(s.quantity || 0), 0);
       const missing = sold - (adjusted[line.external_id] ?? 0);
-      if (missing > 0 && line.external_id) out.set(line.external_id, (out.get(line.external_id) ?? 0) + missing);
+      if (missing <= 0) continue;
+      if (line.external_id) out.set(line.external_id, (out.get(line.external_id) ?? 0) + missing);
+      if (line.tcin) out.set(`tcin:${line.tcin}`, (out.get(`tcin:${line.tcin}`) ?? 0) + missing);
     }
   }
+  reservedCache = { at: Date.now(), map: out };
   return out;
 }
 
@@ -88,9 +95,16 @@ export async function desiredQuantities(v: typeof schema.variants.$inferSelect):
   }
   // no location mapping (or this SKU has no stock rows at mapped locations): all Shopify stock goes to the first DC
   if (!Object.keys(out).length && !(fixed && Object.keys(fixed).length)) out[dcs[0].id] = Math.max(0, v.inventory ?? 0);
-  // safety stock + open-order reservation are taken from the largest DC first
-  let deduct = sync.safetyStock;
-  if (sync.reserveOpenOrders && v.sku) deduct += (await reservedBySku()).get(v.sku) ?? 0;
+  // stopped selling on Target (Price & inventory › Disable): 0 everywhere
+  const vo = (v.overrides ?? {}) as any;
+  if (vo._disabled) { for (const dc of Object.keys(out)) out[dc] = 0; if (!Object.keys(out).length) out[dcs[0].id] = 0; return out; }
+  // buffer (safety stock): per SKU when set, otherwise the global one; then open-order reservation; largest DC first
+  const buf = vo._buffer !== undefined && vo._buffer !== null && vo._buffer !== '' ? Math.max(0, Math.floor(Number(vo._buffer) || 0)) : sync.safetyStock;
+  let deduct = buf;
+  if (sync.reserveOpenOrders) {
+    const res = await reservedBySku();
+    deduct += (v.tcin ? res.get(`tcin:${v.tcin}`) : undefined) ?? (v.sku ? res.get(v.sku) : undefined) ?? 0;
+  }
   for (const dc of Object.keys(out).sort((a, b) => out[b] - out[a])) {
     const take = Math.min(out[dc], deduct);
     out[dc] -= take; deduct -= take;

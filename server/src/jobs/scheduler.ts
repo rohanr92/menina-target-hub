@@ -5,7 +5,7 @@ import { pruneLogs } from '../lib/apilog.js';
 import { getSync } from '../lib/settings.js';
 import { refreshVariantsFromShopify } from '../services/catalog.js';
 import { refreshPending } from '../services/items.js';
-import { pollOrders, syncTrackingFromShopify } from '../services/orders.js';
+import { pollOrders, syncReturnsToShopify, syncTrackingFromShopify } from '../services/orders.js';
 import { refreshOpenReports } from '../services/reports.js';
 import { enqueueMany, startWorker } from '../services/sync.js';
 import { isNotNull } from 'drizzle-orm';
@@ -59,6 +59,7 @@ export function startScheduler() {
     };
     await tick('orders', s.ordersIntervalMin, s.ordersEnabled, pollOrders);
     await tick('tracking', s.ordersIntervalMin, s.ordersEnabled && s.syncTrackingFromShopify, syncTrackingFromShopify);
+    await tick('returns', 60, s.ordersEnabled && s.returnsToShopify, syncReturnsToShopify);
     await tick('inventory', s.inventoryIntervalMin, s.inventoryEnabled || s.priceEnabled, reconcileInventoryAndPrice);
     await tick('item-status', s.statusIntervalMin, true, refreshPending);
     await tick('reports', 2, true, refreshOpenReports);

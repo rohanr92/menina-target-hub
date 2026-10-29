@@ -118,6 +118,7 @@ interface Ctx {
   p: Product; v: Variant | null; vs: Variant[]; level: 'SA' | 'VAP' | 'VC'; theme: Theme;
   itemTypeName: string; size: string; color: string; stage: boolean; forceBrand: string; images: string[]; useMock: boolean;
   titles: SyncTitles;
+  sizeValues?: Record<string, string>;
   sizeKeys: string[]; // the item type's own size fields (e.g. "Shoe Size"), used for the title
   src?: string; original?: string; // set by resolve(): where the value came from
 }
@@ -198,7 +199,7 @@ function autoValue(key: string, c: Ctx): string | undefined {
     case 'digital_assets.images.primary_image_url': return (c.level !== 'VAP' && v?.imageUrl) || c.images[0];
     case 'digital_assets.images.parent_image_url': return c.images[0];
     case 'package_dimensions.measurements.weight': return v?.weightLb ? v.weightLb.toFixed(2) : undefined;
-    case 'child_variations.size': return c.size || undefined;
+    case 'child_variations.size': return (c.size && (c.sizeValues?.[c.size] ?? c.sizeValues?.[c.size.replace(',', '.')])) || c.size || undefined;
     case 'child_variations.color': return c.color || undefined;
     case 'variation.theme': return c.theme === 'SA' ? undefined : c.theme;
     case 'compliance.import_designation': return 'imported';
@@ -349,7 +350,7 @@ export async function buildProduct(productId: string): Promise<BuildResult> {
   };
 
   const ctxFor = (v: Variant | null, level: Ctx['level']): Ctx => ({
-    p, v, vs, level, theme, itemTypeName: itemType.name, stage, forceBrand: sync.stage.forceBrand, images, useMock: sync.stage.useMockBarcodes, titles: sync.titles, sizeKeys,
+    p, v, vs, level, theme, itemTypeName: itemType.name, stage, forceBrand: sync.stage.forceBrand, images, useMock: sync.stage.useMockBarcodes, titles: sync.titles, sizeValues: sync.sizeValues ?? {}, sizeKeys,
     size: v && sizeOption ? String((v.options as any)[sizeOption] ?? '') : '',
     color: v && colorOption ? String((v.options as any)[colorOption] ?? '') : '',
   });
@@ -478,11 +479,16 @@ export async function computePrice(v: Variant) {
   if (ov?.list_price) {
     return { list_price: Number(ov.list_price), offer_price: ov.offer_price ? Number(ov.offer_price) : undefined, map_price: ov.map_price ? Number(ov.map_price) : undefined };
   }
+  // price rule for this SKU (Price & inventory › Price rule): fixed price, or Shopify price ± %
+  const pr = ov?._price_rule as { mode: 'percent' | 'fixed'; value: number } | undefined;
+  if (pr?.mode === 'fixed' && Number(pr.value) > 0) { const x = round(Number(pr.value) / (rule.multiplier || 1)); return { list_price: x }; }
   if (!price || price <= 0) return null;
+  const pct = pr?.mode === 'percent' ? 1 + Number(pr.value) / 100 : 1;
   const list = rule.listFrom === 'compare_at_or_price' && compare && compare > price ? compare : price;
-  const out: { list_price: number; offer_price?: number; map_price?: number } = { list_price: round(list) };
-  if (rule.offerFrom === 'price' && price < list) out.offer_price = round(price);
-  if (rule.mapFrom === 'price') out.map_price = round(price);
+  const out: { list_price: number; offer_price?: number; map_price?: number } = { list_price: round(list * pct) };
+  // Target rule: offer (sale) price must be lower than the list price; MAP not above list
+  if (rule.offerFrom === 'price' && price < list) out.offer_price = round(price * pct);
+  if (rule.mapFrom === 'price') out.map_price = Math.min(round(price * pct), out.list_price);
   return out;
 }
 
