@@ -79,6 +79,11 @@ export async function matchTargetItems() {
  * Link matched Target items to hub products, so the hub updates them (price, inventory, content)
  * instead of creating duplicates. Only fills variants that are not linked yet.
  */
+/** Marks a product as "keep the content already on Target": Send / bulk send skip it (stock + orders still sync). */
+async function lockContent(productId: string) {
+  await db.execute(sql`UPDATE products SET overrides = overrides || '{"keep_target_content": true}'::jsonb WHERE id = ${productId} AND NOT (overrides ? 'keep_target_content')`);
+}
+
 export async function linkMatches(opts: { ids?: string[] } = {}) {
   const env = await getActiveEnv();
   const conds = [eq(schema.targetItems.env, env), sql`${schema.targetItems.matchedProductId} IS NOT NULL`];
@@ -87,6 +92,8 @@ export async function linkMatches(opts: { ids?: string[] } = {}) {
   const types = await db.select().from(schema.itemTypes);
   let linked = 0, skipped = 0;
   for (const t of rows) {
+    // items that were already on Target keep Target's content: the hub never overwrites them by itself
+    await lockContent(t.matchedProductId!);
     if (t.relationshipType === 'VAP') {
       const p = await db.query.products.findFirst({ where: eq(schema.products.id, t.matchedProductId!) });
       if (p && !p.targetParentId) {

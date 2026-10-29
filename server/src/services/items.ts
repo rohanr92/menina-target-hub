@@ -49,6 +49,10 @@ export interface PushOptions { allowWarnings?: boolean; force?: boolean; onlyNew
  *   (Target FAQ #8: updating through the family endpoint can push approved items back to PENDING).
  */
 export async function pushProduct(productId: string, opts: PushOptions = {}) {
+  const p0 = await db.query.products.findFirst({ where: eq(schema.products.id, productId) });
+  if ([true, 'true'].includes((p0?.overrides as any)?.keep_target_content)) {
+    return { ok: false, locked: true, error: 'Not sent: this product was already on Target, so the hub keeps the content that is on Target (stock and orders still sync). Turn off "Keep Target content" on the product page to send the hub version.', results: [], issues: [] };
+  }
   const built = await buildProduct(productId);
   const errors = built.issues.filter((i) => i.level === 'error');
   if (errors.length && !opts.force) {

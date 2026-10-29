@@ -78,13 +78,20 @@ export default function ProductDetail() {
   const optionNames: string[] = p.optionNames ?? [];
   const keys = [...new Set((pv?.items?.[0]?.payload?.fields ?? []).map((f: any) => f.name))] as string[];
   const onTarget = variants.some((v: any) => v.targetProductId);
+  const keepTarget = [true, 'true'].includes(p.overrides?.keep_target_content);
 
   return (
     <div className="page">
       <PageHead title={p.title} sub={<><Link to="/products">Products</Link> · {p.vendor} · {p.productType} · {p.source}</>}>
         <Btn busy={busy === 'refresh'} disabled={!onTarget} onClick={() => run('refresh', () => post(`/api/products/${id}/refresh`), (r: any) => `Statuses refreshed${r?.tcinsFound ? ` · ${r.tcinsFound} TCIN(s) found` : ''}`).then(reloadAll)}>Refresh status</Btn>
         <Btn busy={busy === 'pi'} disabled={!onTarget} onClick={() => run('pi', () => post(`/api/products/${id}/price-inventory`), (r: any) => `Queued price + inventory for ${r.queued} item(s)`)}>Send price & inventory</Btn>
-        <Btn kind="primary" busy={busy === 'push'} onClick={() => push(false)}>{onTarget ? 'Send update to Target' : 'Send to Target'}</Btn>
+        <label className="small" title="Existing Target items keep the content already on Target. Stock and orders still sync." style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <input type="checkbox" checked={keepTarget} onChange={(e) => {
+            if (!e.target.checked && !confirm('Allow the hub to send its own content (title, attributes, images) over what is on Target now?')) return;
+            save({ overrides: { ...(p.overrides ?? {}), keep_target_content: e.target.checked } }, e.target.checked ? 'Keeping Target content' : 'Hub content can be sent now');
+          }} /> Keep Target content
+        </label>
+        <Btn kind="primary" busy={busy === 'push'} disabled={keepTarget} title={keepTarget ? 'Locked: this product keeps the content already on Target' : ''} onClick={() => push(false)}>{onTarget ? 'Send update to Target' : 'Send to Target'}</Btn>
       </PageHead>
 
       <div className="grid3" style={{ marginBottom: 16 }}>
