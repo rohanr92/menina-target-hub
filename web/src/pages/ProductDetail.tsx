@@ -7,7 +7,7 @@ import MappingView from '../components/MappingView';
 import ImagesEditor from '../components/ImagesEditor';
 
 // settings kept in product.overrides that are not Target fields (edited elsewhere on this page)
-const HIDDEN_OV = ['_image_plan', '_keep_target_content', 'keep_target_content'];
+const HIDDEN_OV = ['_image_plan', '_keep_target_content', 'keep_target_content', '_from_target'];
 
 function Issues({ issues }: { issues: any[] }) {
   if (!issues?.length) return <div className="ok small">✓ No problems found. Ready to send.</div>;

@@ -84,16 +84,40 @@ async function lockContent(productId: string) {
   await db.execute(sql`UPDATE products SET overrides = overrides || '{"_keep_target_content": true}'::jsonb WHERE id = ${productId} AND NOT (overrides ? '_keep_target_content') AND NOT (overrides ? 'keep_target_content')`);
 }
 
+/**
+ * Existing Target items: copy every field Target has into the hub as overrides, so the hub shows (and would send)
+ * Target's data instead of building it from Shopify. Done once per item; later hub edits are kept.
+ * VC/SA fields go on the variant, VAP (parent) fields on the product.
+ */
+async function adoptTargetFields(t: typeof schema.targetItems.$inferSelect) {
+  const fields = (t.fields ?? []) as { name: string; value: any }[];
+  if (!fields.length) return false;
+  const vals: Record<string, any> = {};
+  for (const f of fields) if (f?.name && f.value !== undefined && f.value !== null && f.value !== '') vals[f.name] = Array.isArray(f.value) ? f.value.join('|') : String(f.value);
+  if (t.relationshipType === 'VAP') {
+    const p = await db.query.products.findFirst({ where: eq(schema.products.id, t.matchedProductId!) });
+    if (!p || (p.overrides as any)?._from_target) return false;
+    await db.update(schema.products).set({ overrides: { ...(p.overrides as any), ...vals, _from_target: t.id } }).where(eq(schema.products.id, p.id));
+    return true;
+  }
+  if (!t.matchedVariantId) return false;
+  const v = await db.query.variants.findFirst({ where: eq(schema.variants.id, t.matchedVariantId) });
+  if (!v || (v.overrides as any)?._from_target) return false;
+  await db.update(schema.variants).set({ overrides: { ...(v.overrides as any), ...vals, _from_target: t.id } }).where(eq(schema.variants.id, v.id));
+  return true;
+}
+
 export async function linkMatches(opts: { ids?: string[] } = {}) {
   const env = await getActiveEnv();
   const conds = [eq(schema.targetItems.env, env), sql`${schema.targetItems.matchedProductId} IS NOT NULL`];
   if (opts.ids?.length) conds.push(inArray(schema.targetItems.id, opts.ids));
   const rows = await db.select().from(schema.targetItems).where(and(...conds));
   const types = await db.select().from(schema.itemTypes);
-  let linked = 0, skipped = 0;
+  let linked = 0, skipped = 0, adopted = 0;
   for (const t of rows) {
     // items that were already on Target keep Target's content: the hub never overwrites them by itself
     await lockContent(t.matchedProductId!);
+    if (await adoptTargetFields(t)) adopted++;
     if (t.relationshipType === 'VAP') {
       const p = await db.query.products.findFirst({ where: eq(schema.products.id, t.matchedProductId!) });
       if (p && !p.targetParentId) {
@@ -114,7 +138,7 @@ export async function linkMatches(opts: { ids?: string[] } = {}) {
     }
     linked++;
   }
-  return { linked, skipped };
+  return { linked, skipped, adopted };
 }
 
 /** For Target items with no Shopify match: find their UPCs/SKUs in Shopify, import those products, re-match. */

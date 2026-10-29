@@ -245,7 +245,7 @@ function resolve(key: string, rule: MappingRule | undefined, c: Ctx): string | u
   // stage only accepts the test brand, even if you typed your real brand on the SKU (your brand still goes in the title)
   if (key === 'brands.name' && c.stage && c.forceBrand) { c.src = 'Stage rule (Target requires Valor Fitness)'; return c.forceBrand; }
   if (ov === NONE) { c.src = 'Left empty on purpose'; return undefined; }
-  if (ov !== undefined && ov !== null && ov !== '') { c.src = vov !== undefined ? 'Override (this variant)' : 'Override (this product)'; return Array.isArray(ov) ? ov.join('|') : String(ov); }
+  if (ov !== undefined && ov !== null && ov !== '') { c.src = vov !== undefined ? ((c.v?.overrides as any)?._from_target ? 'From Target (existing item)' : 'Override (this variant)') : ((c.p.overrides as any)?._from_target ? 'From Target (existing item)' : 'Override (this product)'); return Array.isArray(ov) ? ov.join('|') : String(ov); }
   if (key === 'brands.name' && c.stage && c.forceBrand) { c.src = 'Stage rule (Target requires Valor Fitness)'; return c.forceBrand; }
   if (key === 'barcode.value' && c.stage && c.useMock && c.v?.mockBarcode) { c.src = `Stage test barcode (real: ${c.v.barcode || 'none'})`; return c.v.mockBarcode; }
   let val: string | undefined;
