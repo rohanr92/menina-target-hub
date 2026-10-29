@@ -390,10 +390,24 @@ export async function pushOrderToShopify(orderId: string) {
 }
 
 /** For orders pushed to Shopify: when Shopify has a fulfillment with tracking, send it to Target. */
-export async function syncTrackingFromShopify() {
+/** Carrier from the tracking number when Shopify has no carrier name (UPS 1Z…, USPS 9x… 20-22 digits, FedEx 12/15/20 digits). */
+export function carrierFromTracking(n: string): string {
+  const x = String(n || '').replace(/\s+/g, '').toUpperCase();
+  if (/^1Z[0-9A-Z]{16}$/.test(x)) return 'ups';
+  if (/^(94|93|92|95)\d{18,20}$/.test(x) || /^[A-Z]{2}\d{9}US$/.test(x)) return 'usps';
+  if (/^\d{12}$/.test(x) || /^\d{15}$/.test(x) || /^\d{20}$/.test(x)) return 'fedex';
+  return '';
+}
+
+/**
+ * Shopify fulfillments → Target shipments. Runs on a timer and instantly from the fulfillments/create|update
+ * webhook (only for that order). Carrier comes from Shopify's tracking company, else from the number itself.
+ */
+export async function syncTrackingFromShopify(opts: { shopifyOrderIds?: string[] } = {}) {
   const sync = await getSync();
   const methods = await db.select().from(schema.shippingMethods);
-  const open = await db.select().from(schema.orders).where(and(inArray(schema.orders.status, OPEN), isNotNull(schema.orders.shopifyOrderId)));
+  const open = await db.select().from(schema.orders).where(and(inArray(schema.orders.status, OPEN), isNotNull(schema.orders.shopifyOrderId),
+    ...(opts.shopifyOrderIds?.length ? [inArray(schema.orders.shopifyOrderId, opts.shopifyOrderIds)] : [])));
   let sent = 0, failed = 0;
   for (const o of open) {
     try {
@@ -403,8 +417,9 @@ export async function syncTrackingFromShopify() {
         if (done.has(f.id) || f.status !== 'SUCCESS') continue;
         const t = f.trackingInfo?.[0];
         if (!t?.number) continue;
-        const company = String(t.company ?? '').toLowerCase();
-        const methodName = Object.entries(sync.carrierMap).find(([k]) => k && company.includes(k))?.[1];
+        const company = String(t.company ?? '').toLowerCase() || carrierFromTracking(t.number);
+        const methodName = Object.entries(sync.carrierMap).find(([k]) => k && company.replace(/\s+/g, '').includes(k.replace(/\s+/g, '')))?.[1]
+          ?? Object.entries(sync.carrierMap).find(([k]) => k === carrierFromTracking(t.number))?.[1];
         const method = methods.find((m) => m.shippingMethod === methodName);
         if (!method) throw new Error(`No Target shipping method mapped for carrier "${t.company}". Set it in Settings › Sync & rules.`);
         const fresh = await refreshOrder(o.id);

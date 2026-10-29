@@ -12,7 +12,7 @@ const bad = (msg: string, code = 400) => Object.assign(new Error(msg), { statusC
 const WEBHOOK_LIST = `query Hooks { webhookSubscriptions(first: 100) { nodes { id topic uri } } }`;
 const WEBHOOK_LIST_OLD = `query Hooks { webhookSubscriptions(first: 100) { nodes { id topic endpoint { __typename ... on WebhookHttpEndpoint { callbackUrl } } } } }`;
 const WEBHOOK_CREATE = `mutation Hook($topic: WebhookSubscriptionTopic!, $sub: WebhookSubscriptionInput!) { webhookSubscriptionCreate(topic: $topic, webhookSubscription: $sub) { webhookSubscription { id } userErrors { field message } } }`;
-const TOPICS = ['INVENTORY_LEVELS_UPDATE', 'PRODUCTS_UPDATE'];
+const TOPICS = ['INVENTORY_LEVELS_UPDATE', 'PRODUCTS_UPDATE', 'FULFILLMENTS_CREATE', 'FULFILLMENTS_UPDATE'];
 
 async function listHooks(): Promise<{ id: string; topic: string; url: string }[]> {
   try {

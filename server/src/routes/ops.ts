@@ -365,11 +365,17 @@ export default async function (app: FastifyInstance) {
   // ---------------- Shopify webhooks (inventory_levels/update, products/update) ----------------
   const pendingInventoryItems = new Set<string>();
   const pendingVariants = new Set<string>();
+  const pendingOrders = new Set<string>();
   let flushTimer: NodeJS.Timeout | null = null;
   const flush = async () => {
     flushTimer = null;
     const invIds = [...pendingInventoryItems]; pendingInventoryItems.clear();
     const varIds = [...pendingVariants]; pendingVariants.clear();
+    const orderIds = [...pendingOrders]; pendingOrders.clear();
+    if (orderIds.length) {
+      const s0 = await getSync();
+      if (s0.syncTrackingFromShopify) await O.syncTrackingFromShopify({ shopifyOrderIds: orderIds }).catch((e) => console.error('tracking webhook', e));
+    }
     const rows = await db.select({ id: schema.variants.id, sourceId: schema.variants.sourceId, inventory: schema.variants.inventory, price: schema.variants.price, compareAtPrice: schema.variants.compareAtPrice })
       .from(schema.variants).where(or(invIds.length ? inArray(schema.variants.inventoryItemId, invIds) : sql`false`, varIds.length ? inArray(schema.variants.sourceId, varIds) : sql`false`));
     if (!rows.length) return;
@@ -390,6 +396,7 @@ export default async function (app: FastifyInstance) {
     const topic = String(req.headers['x-shopify-topic'] ?? '');
     const body: any = req.body;
     if (topic === 'inventory_levels/update' && body?.inventory_item_id) pendingInventoryItems.add(`gid://shopify/InventoryItem/${body.inventory_item_id}`);
+    if ((topic === 'fulfillments/create' || topic === 'fulfillments/update') && body?.order_id) pendingOrders.add(`gid://shopify/Order/${body.order_id}`);
     if (topic === 'products/update') for (const v of body?.variants ?? []) pendingVariants.add(v.admin_graphql_api_id ?? `gid://shopify/ProductVariant/${v.id}`);
     // debounce: batch rapid changes together
     if (!flushTimer) flushTimer = setTimeout(() => { flush().catch((e) => console.error('webhook flush', e)); }, 4000);
