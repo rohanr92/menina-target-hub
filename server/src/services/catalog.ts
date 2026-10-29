@@ -202,3 +202,14 @@ export async function importByCodes(rawCodes: string[]) {
   }
   return { searched: codes.length, foundCodes: found.size, notFound: codes.filter((c) => !found.has(c)), products: count, created, changedVariantIds: changed };
 }
+
+/** Re-read one product (images, options, variants) from Shopify, e.g. after new photos were added there. */
+export async function reloadProductFromShopify(productId: string) {
+  const p = await db.query.products.findFirst({ where: eq(schema.products.id, productId) });
+  if (!p || p.source !== 'shopify' || !p.sourceId.startsWith('gid://shopify/Product/')) return { reloaded: false };
+  const d: any = await shopifyGraphql(PRODUCTS_BY_IDS, { ids: [p.sourceId] }, 'shopify-reload');
+  const sp = (d.nodes ?? []).find((x: any) => x?.id);
+  if (!sp) return { reloaded: false };
+  await upsertSourceProduct(mapShopifyProduct(sp));
+  return { reloaded: true, images: (sp.media?.nodes ?? []).length };
+}

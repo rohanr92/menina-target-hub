@@ -62,7 +62,8 @@ export default function ImagesEditor({ productId }: { productId: string }) {
 
   return (
     <div className="stack">
-      <Card title="Shopify images" actions={<span className="small muted">Drag an image onto a color below</span>}>
+      <Card title={`Shopify images (${pool.length})`} actions={<><span className="small muted">Drag an image onto a color below</span><Btn size="sm" kind="ghost" busy={d.loading} onClick={d.reload}>Reload from Shopify</Btn></>}>
+        {d.data.reloadError && <div className="small warn" style={{ marginBottom: 6 }}>Could not reload from Shopify: {d.data.reloadError}</div>}
         <div className="row" style={{ flexWrap: 'wrap', gap: 8 }}>
           {pool.map((u: string) => <Thumb key={u} url={u} draggable onDragStart={() => setDrag({ url: u, from: null, index: -1 })} onDragEnd={() => { setDrag(null); setOver(null); }} />)}
           {!pool.length && <span className="muted small">This product has no images in Shopify.</span>}

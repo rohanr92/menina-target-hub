@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import * as T from '../target/api.js';
 import { detectOptions } from './builder.js';
+import { reloadProductFromShopify } from './catalog.js';
 import { storeTargetProduct } from './targetCatalog.js';
 
 /**
@@ -36,6 +37,9 @@ async function load(productId: string) {
 
 /** Everything the image editor needs: Shopify image pool, colors, what Target shows now, saved plan. */
 export async function imageEditor(productId: string) {
+  // always show the latest Shopify photos (new ones added in Shopify appear right away)
+  let reloadError: string | null = null;
+  try { await reloadProductFromShopify(productId); } catch (e: any) { reloadError = e?.message ?? String(e); }
   const { p, vs, colorOption, colorOf, plan } = await load(productId);
   const pool = [...new Set([...(p.images as string[]), ...vs.map((v) => v.imageUrl).filter(Boolean) as string[]])];
   const groups = new Map<string, typeof vs>();
@@ -54,7 +58,7 @@ export async function imageEditor(productId: string) {
       plan: plan[color] ?? null, suggested: suggested.length ? suggested : pool.slice(0, 5),
     });
   }
-  return { colorOption, pool, colors, hasParent: !!p.targetParentId };
+  return { colorOption, pool, colors, hasParent: !!p.targetParentId, reloadError };
 }
 
 export async function saveImagePlan(productId: string, plan: ImagePlan) {

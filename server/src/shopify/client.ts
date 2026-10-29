@@ -62,7 +62,7 @@ query Products($first: Int!, $after: String, $query: String) {
     nodes {
       id handle title descriptionHtml vendor productType tags status
       options { name position }
-      media(first: 20) { nodes { ... on MediaImage { image { url } } } }
+      media(first: 50) { nodes { ... on MediaImage { image { url } } } }
       variants(first: 100) { nodes { ${VARIANT_FIELDS} } }
     }
   }
@@ -76,7 +76,7 @@ query ProductsByIds($ids: [ID!]!) {
     ... on Product {
       id handle title descriptionHtml vendor productType tags status
       options { name position }
-      media(first: 20) { nodes { ... on MediaImage { image { url } } } }
+      media(first: 50) { nodes { ... on MediaImage { image { url } } } }
       variants(first: 100) { nodes { ${VARIANT_FIELDS} } }
     }
   }
