@@ -50,7 +50,8 @@ export interface PushOptions { allowWarnings?: boolean; force?: boolean; onlyNew
  */
 export async function pushProduct(productId: string, opts: PushOptions = {}) {
   const p0 = await db.query.products.findFirst({ where: eq(schema.products.id, productId) });
-  if ([true, 'true'].includes((p0?.overrides as any)?.keep_target_content)) {
+  const ovk = (p0?.overrides as any) ?? {};
+  if ([true, 'true'].includes(ovk._keep_target_content ?? ovk.keep_target_content)) {
     return { ok: false, locked: true, error: 'Not sent: this product was already on Target, so the hub keeps the content that is on Target (stock and orders still sync). Turn off "Keep Target content" on the product page to send the hub version.', results: [], issues: [] };
   }
   const built = await buildProduct(productId);

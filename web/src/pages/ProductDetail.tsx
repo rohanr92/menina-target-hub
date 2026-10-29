@@ -4,6 +4,10 @@ import { del, get, patch, post } from '../lib/api';
 import { ago, money } from '../lib/format';
 import { Btn, Card, Copy, ErrorBox, Field, Json, Loading, Modal, PageHead, Status, Tabs, useAction, useLoad } from '../components/ui';
 import MappingView from '../components/MappingView';
+import ImagesEditor from '../components/ImagesEditor';
+
+// settings kept in product.overrides that are not Target fields (edited elsewhere on this page)
+const HIDDEN_OV = ['_image_plan', '_keep_target_content', 'keep_target_content'];
 
 function Issues({ issues }: { issues: any[] }) {
   if (!issues?.length) return <div className="ok small">✓ No problems found. Ready to send.</div>;
@@ -45,7 +49,7 @@ export default function ProductDetail() {
   const preview = useLoad(() => get(`/api/products/${id}/preview`), [id]);
   const types = useLoad(() => get('/api/taxonomy/item-types'));
   const { busy, run } = useAction();
-  const [tab, setTab] = useState<'mapping' | 'items' | 'content' | 'json' | 'logistics'>('mapping');
+  const [tab, setTab] = useState<'mapping' | 'items' | 'content' | 'images' | 'json' | 'logistics'>('mapping');
   const [bullets, setBullets] = useState<string>('');
   const [live, setLive] = useState<any>(null);
   const [lastResult, setLastResult] = useState<any>(null);
@@ -78,7 +82,7 @@ export default function ProductDetail() {
   const optionNames: string[] = p.optionNames ?? [];
   const keys = [...new Set((pv?.items?.[0]?.payload?.fields ?? []).map((f: any) => f.name))] as string[];
   const onTarget = variants.some((v: any) => v.targetProductId);
-  const keepTarget = [true, 'true'].includes(p.overrides?.keep_target_content);
+  const keepTarget = [true, 'true'].includes(p.overrides?._keep_target_content ?? p.overrides?.keep_target_content);
 
   return (
     <div className="page">
@@ -88,7 +92,7 @@ export default function ProductDetail() {
         <label className="small" title="Existing Target items keep the content already on Target. Stock and orders still sync." style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
           <input type="checkbox" checked={keepTarget} onChange={(e) => {
             if (!e.target.checked && !confirm('Allow the hub to send its own content (title, attributes, images) over what is on Target now?')) return;
-            save({ overrides: { ...(p.overrides ?? {}), keep_target_content: e.target.checked } }, e.target.checked ? 'Keeping Target content' : 'Hub content can be sent now');
+            save({ overrides: { ...Object.fromEntries(Object.entries(p.overrides ?? {}).filter(([k]) => k !== 'keep_target_content')), _keep_target_content: e.target.checked } }, e.target.checked ? 'Keeping Target content' : 'Hub content can be sent now');
           }} /> Keep Target content
         </label>
         <Btn kind="primary" busy={busy === 'push'} disabled={keepTarget} title={keepTarget ? 'Locked: this product keeps the content already on Target' : ''} onClick={() => push(false)}>{onTarget ? 'Send update to Target' : 'Send to Target'}</Btn>
@@ -146,7 +150,7 @@ export default function ProductDetail() {
         </Card>
       </div>
 
-      <Tabs value={tab} onChange={setTab} items={[['mapping', 'Shopify → Target mapping'], ['items', `Items (${variants.length})`], ['content', 'Content & overrides'], ['json', 'Target JSON'], ['logistics', 'Logistics']]} />
+      <Tabs value={tab} onChange={setTab} items={[['mapping', 'Shopify → Target mapping'], ['items', `Items (${variants.length})`], ['content', 'Content & overrides'], ['images', 'Images'], ['json', 'Target JSON'], ['logistics', 'Logistics']]} />
 
       {tab === 'mapping' && <MappingView key={p.updatedAt} productId={id!} itemTypeId={p.itemTypeId} />}
 
@@ -194,7 +198,7 @@ export default function ProductDetail() {
           </Card>
           <Card title="Attribute overrides (this product only)">
             <p className="small muted" style={{ marginTop: 0 }}>Values here win over the item type mapping, for every item in this product. Use the attribute key shown in the Target JSON (e.g. <code>107707</code>, <code>descriptions.parent_title</code>).</p>
-            <Overrides value={p.overrides} keys={keys} onSave={(o) => save({ overrides: o }, 'Overrides saved')} />
+            <Overrides value={Object.fromEntries(Object.entries(p.overrides ?? {}).filter(([k]) => !HIDDEN_OV.includes(k)))} keys={keys} onSave={(o) => save({ overrides: { ...o, ...Object.fromEntries(Object.entries(p.overrides ?? {}).filter(([k]) => HIDDEN_OV.includes(k))) } }, 'Overrides saved')} />
           </Card>
           <Card title="Shopify description">
             <div className="small" style={{ maxHeight: 300, overflow: 'auto' }} dangerouslySetInnerHTML={{ __html: (p.descriptionHtml ?? '').replace(/<script[\s\S]*?<\/script>/gi, '') }} />
@@ -206,6 +210,7 @@ export default function ProductDetail() {
         </div>
       )}
 
+      {tab === 'images' && <ImagesEditor productId={id!} />}
       {tab === 'json' && pv && (
         <div className="stack">
           {pv.parent && <Card title={`Parent (VAP) · ${pv.parent.external_id}`} actions={<Copy text={JSON.stringify(pv.parent, null, 2)} />}><Json value={pv.parent} /></Card>}

@@ -81,7 +81,7 @@ export async function matchTargetItems() {
  */
 /** Marks a product as "keep the content already on Target": Send / bulk send skip it (stock + orders still sync). */
 async function lockContent(productId: string) {
-  await db.execute(sql`UPDATE products SET overrides = overrides || '{"keep_target_content": true}'::jsonb WHERE id = ${productId} AND NOT (overrides ? 'keep_target_content')`);
+  await db.execute(sql`UPDATE products SET overrides = overrides || '{"_keep_target_content": true}'::jsonb WHERE id = ${productId} AND NOT (overrides ? '_keep_target_content') AND NOT (overrides ? 'keep_target_content')`);
 }
 
 export async function linkMatches(opts: { ids?: string[] } = {}) {
