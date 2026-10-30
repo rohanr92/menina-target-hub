@@ -72,7 +72,10 @@ export default async function (app: FastifyInstance) {
     for (const t of errs) if (t.variantId && !lastTask.has(t.variantId)) lastTask.set(t.variantId, t);
     let planError: string | null = null;
     const rows: any[] = [];
-    const titles = new Map((vs.length ? await db.select({ id: schema.products.id, title: schema.products.title }).from(schema.products).where(inArray(schema.products.id, [...new Set(vs.map((v) => v.productId))])) : []).map((p) => [p.id, p.title]));
+    const prods = vs.length ? await db.select({ id: schema.products.id, title: schema.products.title, images: schema.products.images }).from(schema.products).where(inArray(schema.products.id, [...new Set(vs.map((v) => v.productId))])) : [];
+    const titles = new Map(prods.map((p) => [p.id, p.title]));
+    const imgs = new Map(prods.map((p) => [p.id, (p.images as string[] | null)?.[0] ?? null]));
+    const { computePrice } = await import('../services/builder.js');
     for (const v of vs) {
       let want: Record<string, number> | null = null;
       if (dcs.length && !planError) { try { want = await desiredQuantities(v); } catch (e: any) { planError = e?.message ?? String(e); } }
@@ -83,7 +86,8 @@ export default async function (app: FastifyInstance) {
         shopifyPrice: v.price, compareAtPrice: v.compareAtPrice, priceSent: v.lastPriceSent ?? null, priceSentAt: v.lastPriceSentAt,
         stockFixed: (v.overrides as any)?.fixed_qty ?? null,
         buffer: (v.overrides as any)?._buffer ?? null, disabled: !!(v.overrides as any)?._disabled, priceRule: (v.overrides as any)?._price_rule ?? null,
-        title: titles.get(v.productId) ?? '', options: v.options ?? {}, listingStatus: v.listingStatus,
+        title: titles.get(v.productId) ?? '', options: v.options ?? {}, listingStatus: v.listingStatus, validationStatus: v.validationStatus,
+        image: v.imageUrl || imgs.get(v.productId) || null, priceWant: await computePrice(v).catch(() => null),
         priceOverride: (v.overrides as any)?.list_price ? { list_price: (v.overrides as any).list_price, offer_price: (v.overrides as any).offer_price ?? null, map_price: (v.overrides as any).map_price ?? null } : null,
         task: t ? { status: t.status, error: t.lastError, result: t.result, at: t.updatedAt } : null,
       });
