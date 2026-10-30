@@ -87,17 +87,17 @@ function StockCard({ stock, sel, setSel, onlyProblems, setOnlyProblems, busy, ru
   const pkey = (p: any) => p ? [p.list_price, p.offer_price ?? null, p.map_price ?? null].map((x) => (x == null ? '' : Number(x).toFixed(2))).join('|') : '';
   const priceDiff = (r: any) => d.priceEnabled && r.priceWant && pkey(r.priceWant) !== pkey(r.priceSent);
   const problem = (r: any) => r.task?.status === 'failed' || !r.sentAt || stockDiff(r);
-  const counts: Record<string, number> = { all: rowsAll.length, APPROVED: 0, PENDING: 0, REJECTED: 0, UNLISTED: 0, oos: 0, disabled: 0, problems: 0 };
+  const counts: Record<string, number> = { all: rowsAll.length, APPROVED: 0, PENDING: 0, REJECTED: 0, UNLISTED: 0, instock: 0, units: 0, oos: 0, disabled: 0, problems: 0 };
   for (const r of rowsAll) {
     if (r.listingStatus && counts[r.listingStatus] !== undefined) counts[r.listingStatus]++;
-    if (!total(r, 'want')) counts.oos++;
+    if (!total(r, 'want')) counts.oos++; else { counts.instock++; counts.units += total(r, 'want'); }
     if (r.disabled) counts.disabled++;
     if (problem(r)) counts.problems++;
   }
   const words = q.toLowerCase().split(/\s+/).filter(Boolean);
   const hay = (r: any) => [r.sku, r.tcin, r.title, ...Object.values(r.options ?? {})].filter(Boolean).join(' ').toLowerCase();
   const optHit = (r: any, w: string) => Object.values(r.options ?? {}).some((x: any) => String(x).toLowerCase() === w);
-  const inView = (r: any) => view === 'all' ? true : view === 'oos' ? !total(r, 'want') : view === 'disabled' ? r.disabled : view === 'problems' ? problem(r) : r.listingStatus === view;
+  const inView = (r: any) => view === 'all' ? true : view === 'oos' ? !total(r, 'want') : view === 'instock' ? total(r, 'want') > 0 : view === 'disabled' ? r.disabled : view === 'problems' ? problem(r) : r.listingStatus === view;
   const rows = rowsAll.filter((r) => inView(r) && (!onlyProblems || problem(r)) && words.every((w) => optHit(r, w) || hay(r).includes(w)));
   const shown = rows.slice(0, limit);
   const ids = [...sel] as string[];
@@ -120,7 +120,8 @@ function StockCard({ stock, sel, setSel, onlyProblems, setOnlyProblems, busy, ru
         <Tile k="PENDING" label="Pending review" tone="#92400e" />
         <Tile k="REJECTED" label="Rejected" tone="#991b1b" />
         <Tile k="UNLISTED" label="Unlisted" tone="#374151" />
-        <Tile k="oos" label="Out of stock (0 sent)" />
+        <Tile k="instock" label={`In stock · ${counts.units} units`} tone="#166534" />
+        <Tile k="oos" label="Out of stock" />
         <Tile k="disabled" label="Disabled by you" />
         <Tile k="problems" label="Not sent / failed" tone={counts.problems ? '#b45309' : undefined} />
       </div>
@@ -200,9 +201,11 @@ function StockCard({ stock, sel, setSel, onlyProblems, setOnlyProblems, busy, ru
                   </td>
                   <td style={{ whiteSpace: 'nowrap' }}>
                     <span style={{ fontSize: 11, fontWeight: 700, color: srcColor }}>{src}</span>
-                    {ps ? <div><b>{usd(ps.offer_price ?? ps.list_price)}</b>{ps.offer_price != null && <span className="muted small" style={{ textDecoration: 'line-through', marginLeft: 6 }}>{usd(ps.list_price)}</span>}{ps.map_price != null && <span className="muted small"> · MAP {usd(ps.map_price)}</span>}</div> : <div className="muted small">not sent</div>}
+                    {ps ? <div title="What Target has now">{ps.offer_price != null
+                      ? <><b>{usd(ps.offer_price)}</b> <span className="small" style={{ color: '#b91c1c', fontWeight: 600 }}>sale</span> <span className="muted small">· regular <span style={{ textDecoration: 'line-through' }}>{usd(ps.list_price)}</span></span></>
+                      : <b>{usd(ps.list_price)}</b>}{ps.map_price != null && <span className="muted small"> · MAP {usd(ps.map_price)}</span>}</div> : <div className="muted small">not on Target yet (price not sent)</div>}
                     <div className="small muted">Shopify {usd(r.shopifyPrice)}{r.compareAtPrice && Number(r.compareAtPrice) > Number(r.shopifyPrice) ? ` (was ${usd(r.compareAtPrice)})` : ''}</div>
-                    {priceDiff(r) && pw && <div className="small warn">→ {usd(pw.offer_price ?? pw.list_price)} next</div>}
+                    {priceDiff(r) && pw && <div className="small warn">Sending next: {usd(pw.offer_price ?? pw.list_price)}{pw.offer_price != null ? ` sale (regular ${usd(pw.list_price)})` : ''}</div>}
                   </td>
                   <td style={{ whiteSpace: 'nowrap' }}>
                     <button className="btn sm" onClick={() => setPriceFor(r)}>Price</button>{' '}
