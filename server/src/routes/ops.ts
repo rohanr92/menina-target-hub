@@ -203,11 +203,17 @@ export default async function (app: FastifyInstance) {
   app.get('/api/orders/:id', async (req) => {
     const o = await db.query.orders.findFirst({ where: eq(schema.orders.id, (req.params as any).id) });
     if (!o) throw bad('Order not found', 404);
-    const skus = ((o.raw as any)?.order_lines ?? []).map((l: any) => l.external_id).filter(Boolean);
-    const vs = skus.length ? await db.select({
-      sku: schema.variants.sku, productId: schema.variants.productId, title: schema.variants.title, imageUrl: schema.variants.imageUrl,
-      options: schema.variants.options, productTitle: schema.products.title, productImages: schema.products.images,
-    }).from(schema.variants).leftJoin(schema.products, eq(schema.products.id, schema.variants.productId)).where(inArray(schema.variants.sku, skus)) : [];
+    // each Target line → hub SKU by UPC first, then SKU, then the old app's "#shop-<variant id>", then TCIN
+    const vs: any[] = [];
+    for (const l of (o.raw as any)?.order_lines ?? []) {
+      const r = await O.resolveLineVariant(l, { localOnly: true }).catch(() => ({} as any));
+      if (!r.local) continue;
+      const p = await db.query.products.findFirst({ where: eq(schema.products.id, r.local.productId) });
+      vs.push({
+        sku: l.external_id ?? r.local.sku, hubSku: r.local.sku, matchedBy: r.by, productId: r.local.productId, title: r.local.title, imageUrl: r.local.imageUrl,
+        options: r.local.options, productTitle: p?.title, productImages: p?.images ?? [], lineNumber: l.order_line_number,
+      });
+    }
     return { ...o, items: vs, shippingMethods: await db.select().from(schema.shippingMethods) };
   });
   app.post('/api/orders/poll', async () => runJob('orders', O.pollOrders));

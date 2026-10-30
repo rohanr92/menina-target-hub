@@ -40,7 +40,7 @@ export default function OrderDetail() {
   const reload = d.reload;
   const enc = encodeURIComponent(o.id);
   const fulfillments: any[] = Array.isArray(o.fulfillments) ? o.fulfillments : [];
-  const itemOf = (l: any) => o.items?.find((x: any) => x.sku === l.external_id);
+  const itemOf = (l: any) => o.items?.find((x: any) => x.lineNumber === l.order_line_number) ?? o.items?.find((x: any) => x.sku === l.external_id);
   const lineByNo = (n: string) => lines.find((l) => String(l.order_line_number) === String(n));
   const anyOpen = lines.some((l) => openQty(l) > 0);
   const totals = {
@@ -86,7 +86,7 @@ export default function OrderDetail() {
         <div className="od-info">
           <div className="od-title">{it ? <Link to={`/products/${it.productId}`}>{it.productTitle ?? l.external_id}</Link> : l.external_id}</div>
           {opts && <div className="muted small">{opts}</div>}
-          <div className="muted small mono">SKU {l.external_id} · TCIN {l.tcin} · line {l.order_line_number}</div>
+          <div className="muted small mono">{it?.hubSku && it.hubSku !== l.external_id ? <>SKU {it.hubSku} (Target: {l.external_id})</> : <>SKU {l.external_id}</>} · TCIN {l.tcin} · line {l.order_line_number}{it?.matchedBy ? ` · matched by ${it.matchedBy}` : ""}</div>
           {!it && <div className="small warn">SKU not found in the hub</div>}
         </div>
         <div className={`od-price ${bad ? 'bad' : ''}`}>{money(l.unit_price)} × {qty}{bad && <div className="small">price looks wrong</div>}</div>

@@ -5,7 +5,7 @@ import { dt, money } from '../lib/format';
 import { Btn, Card, Loading, PageHead, Status, Tabs, useAction, useLoad } from '../components/ui';
 
 export default function Orders() {
-  const [status, setStatus] = useState('open');
+  const [status, setStatus] = useState('');
   const [q, setQ] = useState('');
   const list = useLoad(() => get(`/api/orders?status=${status}&q=${encodeURIComponent(q)}`), [status, q]);
   const { busy, run } = useAction();

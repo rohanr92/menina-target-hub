@@ -18,7 +18,7 @@ type Variant = typeof schema.variants.$inferSelect;
  * Which Shopify variant is this Target order line? UPC first, then SKU, then the item linked to the TCIN.
  * (Items listed by the old app have SKUs like "#shop-…", so UPC matching is what normally hits.)
  */
-export async function resolveLineVariant(l: any): Promise<{ gid?: string; local?: Variant; by?: string; barcode?: string }> {
+export async function resolveLineVariant(l: any, opts: { localOnly?: boolean } = {}): Promise<{ gid?: string; local?: Variant; by?: string; barcode?: string }> {
   const env = await getActiveEnv();
   const tItem = l.tcin ? await db.query.targetItems.findFirst({ where: and(eq(schema.targetItems.env, env), eq(schema.targetItems.tcin, String(l.tcin))) }) : null;
   const linked = l.tcin ? await db.query.variants.findFirst({ where: eq(schema.variants.tcin, String(l.tcin)) }) : null;
@@ -27,15 +27,17 @@ export async function resolveLineVariant(l: any): Promise<{ gid?: string; local?
   if (barcode) {
     const local = await db.query.variants.findFirst({ where: eq(schema.variants.barcode, barcode) });
     if (isGid(local)) return { gid: local!.sourceId, local: local!, by: 'upc', barcode };
+    if (opts.localOnly) { /* no Shopify lookups */ } else {
     const d: any = await shopifyGraphql(VARIANT_LOOKUP, { q: `barcode:${JSON.stringify(barcode)}` }, 'shopify-order');
     const hit = d.productVariants.nodes.find((n: any) => n.barcode === barcode);
     if (hit) return { gid: hit.id, local: (await db.query.variants.findFirst({ where: eq(schema.variants.sourceId, hit.id) })) ?? undefined, by: 'upc', barcode };
+    }
   }
   const sku = l.external_id ? String(l.external_id) : '';
   if (sku && !sku.startsWith('#shop-')) {
     const local = await db.query.variants.findFirst({ where: eq(schema.variants.sku, sku) });
     if (isGid(local)) return { gid: local!.sourceId, local: local!, by: 'sku', barcode };
-    const d: any = await shopifyGraphql(VARIANT_LOOKUP, { q: `sku:${JSON.stringify(sku)}` }, 'shopify-order');
+    const d: any = opts.localOnly ? { productVariants: { nodes: [] } } : await shopifyGraphql(VARIANT_LOOKUP, { q: `sku:${JSON.stringify(sku)}` }, 'shopify-order');
     const hit = d.productVariants.nodes.find((n: any) => n.sku === sku);
     if (hit) return { gid: hit.id, local: (await db.query.variants.findFirst({ where: eq(schema.variants.sourceId, hit.id) })) ?? undefined, by: 'sku', barcode };
   }
