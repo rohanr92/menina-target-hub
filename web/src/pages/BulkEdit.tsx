@@ -386,6 +386,21 @@ export default function BulkEdit() {
   const [mode, setMode] = useState<'required' | 'all'>('required');
   const [colQ, setColQ] = useState('');
   const [sel, setSel] = useState<Set<string>>(new Set());
+  // Send switch: changed instantly on screen, saved in the background (no grid reload)
+  const [sendLocal, setSendLocal] = useState<Record<string, boolean | null>>({});
+  const sendToast = useToast();
+  const sendOf = (r: Row) => {
+    const l = sendLocal[r.variantId];
+    if (l === undefined) return r.send !== false;
+    return l === null ? r.listingStatus !== 'UNLISTED' : l;
+  };
+  const setSend = (ids: string[], val: boolean | null) => {
+    const before = { ...sendLocal };
+    setSendLocal((x) => { const n = { ...x }; for (const id of ids) n[id] = val; return n; });
+    post('/api/bulk/send-flag', { variantIds: ids, send: val })
+      .then(() => { if (ids.length > 1) sendToast(`Send ${val === null ? 'automatic' : val ? 'ON' : 'OFF'} for ${ids.length} SKU(s)`); })
+      .catch((e: any) => { setSendLocal(before); sendToast(`Could not save: ${e?.message ?? e}`); });
+  };
   const [skuOpen, setSkuOpen] = useState<string | null>(null);
   const [images, setImages] = useState<{ rows: Row[]; cols: Col[]; bulk: boolean } | null>(null);
   const [autoOpen, setAutoOpen] = useState(false);
@@ -493,11 +508,12 @@ export default function BulkEdit() {
           <span style={{ flex: 1 }} />
           <button className="btn sm" onClick={() => setAutoOpen(true)}>Auto-map selected</button>
           <button className="btn sm" onClick={() => setImages({ rows: selRows, cols: imageCols, bulk: true })} disabled={!selRows.length}>Set images</button>
-          <button className="btn sm" onClick={() => run('sf', () => post('/api/bulk/send-flag', { variantIds: selRows.map((r) => r.variantId), send: true }), (r: any) => `Send ON for ${r.updated} SKU(s)`).then(reload)}>Send: on</button>
-          <button className="btn sm" onClick={() => run('sf', () => post('/api/bulk/send-flag', { variantIds: selRows.map((r) => r.variantId), send: false }), (r: any) => `Send OFF for ${r.updated} SKU(s)`).then(reload)}>Send: off</button>
-          <button className="btn sm" title="On, except items unlisted on Target" onClick={() => run('sf', () => post('/api/bulk/send-flag', { variantIds: selRows.map((r) => r.variantId), send: null }), (r: any) => `Send set to automatic for ${r.updated} SKU(s)`).then(reload)}>Send: auto</button>
+          <span className="small" style={{ opacity: .85 }}>Send to Target:</span>
+          <button className="btn sm" style={{ background: '#16a34a', color: '#fff', borderColor: '#16a34a' }} onClick={() => setSend(selRows.map((r) => r.variantId), true)}>ON</button>
+          <button className="btn sm" style={{ background: '#6b7280', color: '#fff', borderColor: '#6b7280' }} onClick={() => setSend(selRows.map((r) => r.variantId), false)}>OFF</button>
+          <button className="btn sm" title="ON, except sizes unlisted on Target" onClick={() => setSend(selRows.map((r) => r.variantId), null)}>Auto</button>
           <button className="btn sm primary" onClick={() => run('push', async () => {
-            const on = selRows.filter((r) => r.send !== false);
+            const on = selRows.filter((r) => sendOf(r));
             const off = selRows.length - on.length;
             const ids = [...new Set(on.map((r) => r.productId))];
             if (!on.length) throw new Error('All selected SKUs have Send off (unlisted on Target or switched off).');
@@ -565,10 +581,13 @@ export default function BulkEdit() {
                     </td>
                     <td className="num">{money(r.price)}<div className="small muted">{r.inventory} in stock</div></td>
                     <td><Status value={r.listingStatus ?? (r.onTarget ? 'SENT' : null)} />
-                      {r.onTarget && <label className="small" style={{ display: 'flex', gap: 4, alignItems: 'center', marginTop: 4, whiteSpace: 'nowrap' }} title={r.sendAuto ? 'Automatic: off when unlisted on Target' : 'Set by you'}>
-                        <input type="checkbox" checked={r.send !== false} onChange={(e) => run('sf', () => post('/api/bulk/send-flag', { variantIds: [r.variantId], send: e.target.checked }), e.target.checked ? 'Send on' : 'Send off').then(reload)} />
-                        <span className={r.send === false ? 'muted' : ''}>Send{r.sendAuto ? '' : ' (set)'}</span>
-                      </label>}
+                      {r.onTarget && (() => {
+                        const on = sendOf(r);
+                        return <button onClick={() => setSend([r.variantId], !on)} title={on ? 'Will be sent with “Send to Target”. Click to turn OFF.' : 'Will NOT be sent. Click to turn ON.'}
+                          style={{ display: 'block', marginTop: 4, padding: '2px 10px', borderRadius: 999, border: 0, cursor: 'pointer', fontSize: 11, fontWeight: 700, color: '#fff', background: on ? '#16a34a' : '#9ca3af', whiteSpace: 'nowrap' }}>
+                          Send {on ? 'ON' : 'OFF'}
+                        </button>;
+                      })()}
                     </td>
                     <td className="small mono">{r.tcin ?? '—'}</td>
                     <td>
