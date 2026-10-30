@@ -188,14 +188,41 @@ export default async function (app: FastifyInstance) {
     const conds: any[] = [];
     if (status === 'open') conds.push(inArray(schema.orders.status, ['RELEASED_FOR_SHIPMENT', 'ACKNOWLEDGED_BY_SELLER', 'PARTIALLY_SHIPPED']));
     else if (status) conds.push(eq(schema.orders.status, status));
-    if (q) conds.push(or(ilike(schema.orders.orderNumber, `%${q}%`), eq(schema.orders.id, q)));
-    const rows = await db.select().from(schema.orders).where(conds.length ? and(...conds) : undefined).orderBy(desc(schema.orders.orderDate)).limit(300);
+    if (q) conds.push(or(ilike(schema.orders.orderNumber, `%${q}%`), eq(schema.orders.id, q), sql`${schema.orders.raw}::text ILIKE ${'%' + q + '%'}`));
+    const rows = await db.select().from(schema.orders).where(conds.length ? and(...conds) : undefined).orderBy(desc(schema.orders.orderDate)).limit(500);
+    // item preview per order (photo, product, size/color): TCIN -> linked SKU, then barcode, then "#shop-<variant id>"
+    const allLines = rows.flatMap((o) => ((o.raw as any)?.order_lines ?? []) as any[]);
+    const tcins = [...new Set(allLines.map((l) => l.tcin).filter(Boolean).map(String))];
+    const shopIds = [...new Set(allLines.map((l) => String(l.external_id ?? '').match(/^#shop-(\d+)$/)?.[1]).filter(Boolean).map((x) => `gid://shopify/ProductVariant/${x}`))];
+    const tItems = tcins.length ? await db.select({ tcin: schema.targetItems.tcin, barcode: schema.targetItems.barcode, title: schema.targetItems.title }).from(schema.targetItems).where(inArray(schema.targetItems.tcin, tcins)) : [];
+    const barcodes = [...new Set(tItems.map((t) => t.barcode).filter(Boolean) as string[])];
+    const vRows = (tcins.length || barcodes.length || shopIds.length) ? await db.select().from(schema.variants).where(or(
+      tcins.length ? inArray(schema.variants.tcin, tcins) : sql`false`, barcodes.length ? inArray(schema.variants.barcode, barcodes) : sql`false`, shopIds.length ? inArray(schema.variants.sourceId, shopIds) : sql`false`)) : [];
+    const pIds = [...new Set(vRows.map((v) => v.productId))];
+    const pRows = pIds.length ? await db.select({ id: schema.products.id, title: schema.products.title, images: schema.products.images }).from(schema.products).where(inArray(schema.products.id, pIds)) : [];
+    const pById = new Map(pRows.map((p) => [p.id, p]));
+    const tByTcin = new Map(tItems.map((t) => [t.tcin, t]));
+    const findV = (l: any) => {
+      const t = l.tcin ? tByTcin.get(String(l.tcin)) : undefined;
+      const sid = String(l.external_id ?? '').match(/^#shop-(\d+)$/)?.[1];
+      return (t?.barcode && vRows.find((v) => v.barcode === t.barcode)) || vRows.find((v) => l.tcin && v.tcin === String(l.tcin)) || (sid && vRows.find((v) => v.sourceId === `gid://shopify/ProductVariant/${sid}`)) || null;
+    };
+    const preview = (l: any) => {
+      const v = findV(l); const p = v ? pById.get(v.productId) : undefined; const t = l.tcin ? tByTcin.get(String(l.tcin)) : undefined;
+      return { title: p?.title ?? t?.title ?? l.external_id, sku: v?.sku ?? l.external_id, options: v ? Object.values((v.options ?? {}) as Record<string, string>).join(' · ') : '', image: v?.imageUrl || (p?.images as string[] | undefined)?.[0] || null, qty: Number(l.quantity || 0) };
+    };
     return rows.map((o) => {
       const lines = (o.raw as any)?.order_lines ?? [];
+      const st = (k: string) => lines.reduce((a: number, l: any) => a + (l.order_line_statuses ?? []).filter((x: any) => x.status === k).reduce((b: number, x: any) => b + Number(x.quantity || 0), 0), 0);
+      const fl: any[] = Array.isArray(o.fulfillments) ? (o.fulfillments as any[]) : ((o.fulfillments as any)?.items ?? []);
+      const trk = fl.find((f: any) => f?.tracking_number);
       return {
+        items: lines.slice(0, 3).map(preview), shippedUnits: st('SHIPPED'), canceledUnits: st('CANCELED'),
+        tracking: trk ? { number: trk.tracking_number, method: trk.shipping_method } : null,
+        discount: lines.reduce((a: number, l: any) => a + Number(l.total_item_discount || 0), 0),
         id: o.id, orderNumber: o.orderNumber, status: o.status, orderDate: o.orderDate, requestedShipmentDate: o.requestedShipmentDate,
         requestedDeliveryDate: o.requestedDeliveryDate, lines: lines.length, units: lines.reduce((a: number, l: any) => a + Number(l.quantity || 0), 0),
-        total: lines.reduce((a: number, l: any) => a + Number(l.total_price || 0), 0), shopifyOrderName: o.shopifyOrderName, lastError: o.lastError ?? o.shopifyPushError,
+        total: lines.reduce((a: number, l: any) => a + Number(l.total_price || 0) - Number(l.total_item_discount || 0), 0), shopifyOrderName: o.shopifyOrderName, lastError: o.lastError ?? o.shopifyPushError,
         customer: (o.address as any)?.shipping_address ? `${(o.address as any).shipping_address.first_name ?? ''} ${(o.address as any).shipping_address.last_name ?? ''}`.trim() : null,
       };
     });
@@ -260,7 +287,15 @@ export default async function (app: FastifyInstance) {
       count(*) FILTER (WHERE status = 'RELEASED_FOR_SHIPMENT')::int AS released,
       count(*) FILTER (WHERE status IN ('RELEASED_FOR_SHIPMENT','ACKNOWLEDGED_BY_SELLER','PARTIALLY_SHIPPED'))::int AS open,
       count(*) FILTER (WHERE status IN ('RELEASED_FOR_SHIPMENT','ACKNOWLEDGED_BY_SELLER','PARTIALLY_SHIPPED') AND requested_shipment_date < now())::int AS late,
-      max(order_date) AS newest
+      max(order_date) AS newest,
+      count(*) FILTER (WHERE status IN ('RELEASED_FOR_SHIPMENT','ACKNOWLEDGED_BY_SELLER','PARTIALLY_SHIPPED') AND requested_shipment_date >= now() AND requested_shipment_date < now() + interval '24 hours')::int AS ship_today,
+      count(*) FILTER (WHERE status = 'ACKNOWLEDGED_BY_SELLER')::int AS acknowledged,
+      count(*) FILTER (WHERE status = 'PARTIALLY_SHIPPED')::int AS partially,
+      count(*) FILTER (WHERE status = 'SHIPPED')::int AS shipped,
+      count(*) FILTER (WHERE status = 'CANCELED')::int AS canceled,
+      count(*)::int AS total,
+      count(*) FILTER (WHERE order_date > now() - interval '7 days')::int AS last7,
+      coalesce(sum((SELECT sum((l->>'total_price')::numeric - coalesce((l->>'total_item_discount')::numeric, 0)) FROM jsonb_array_elements(raw->'order_lines') l)) FILTER (WHERE order_date > now() - interval '30 days' AND status <> 'CANCELED'), 0)::float AS sales30
       FROM orders`);
     return r.rows[0];
   });
