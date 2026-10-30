@@ -25,12 +25,12 @@ export default function TargetCatalog() {
         <Btn kind="primary" busy={busy === 'sync'} onClick={() => run('sync', () => post('/api/target-catalog/sync'), (r: any) => `${r.fetched} Target items · ${r.matchedByUpc} matched by UPC · ${r.matchedBySku} by SKU · ${r.unmatched} not in the hub`).then(d.reload)}>1 · Fetch from Target</Btn>
         <Btn busy={busy === 'imp'} disabled={!s?.unmatched} onClick={() => run('imp', () => post('/api/target-catalog/import-unmatched'), (r: any) => `Found ${r.products ?? 0} Shopify products · ${r.notFound?.length ?? 0} codes not in Shopify`).then(d.reload)}>2 · Import unmatched from Shopify (by UPC)</Btn>
         <Btn busy={busy === 'link'} disabled={!s || s.total - s.unmatched === 0} onClick={() => confirm('Link every matched Target item to its Shopify product?\n\nFor these existing items the hub copies the data that is on Target now (title, attributes, images) and locks “Send”, so Shopify data never replaces it. Stock and orders sync when sync is on.') && run('link', () => post('/api/target-catalog/link', {}), (r: any) => `${r.linked} linked · ${r.skipped} skipped · ${r.adopted ?? 0} copied Target data into the hub`).then(d.reload)}>3 · Link matches</Btn>
-        <Btn busy={busy === 'adopt' || adopt?.running} onClick={() => run('adopt', () => post('/api/target-catalog/adopt', {}), 'Copying Target data into the hub… (about 2 items per second)').then(pollAdopt)}>4 · Copy Target data into hub</Btn>
+        <Btn busy={busy === 'adopt' || adopt?.running} onClick={() => confirm('Read every existing item from Target again and use that data in the hub?\n\nThis replaces what the hub shows for these items with what is on Target now. Takes about 15 minutes for ~1,500 items; you can leave the page.') && run('adopt', () => post('/api/target-catalog/adopt', { force: true }), 'Copying Target data into the hub… (about 2 items per second)').then(pollAdopt)}>4 · Copy Target data into hub</Btn>
       </PageHead>
       {adopt && (adopt.running || adopt.finishedAt) && (
         <div className="card" style={{ marginBottom: 12 }}><div className="card-b small">
           {adopt.running ? <>Copying Target data into the hub: <b>{adopt.done}</b> / {adopt.total} items · {adopt.copied} copied · {adopt.fetched} read from Target{adopt.failed ? <span className="bad"> · {adopt.failed} failed</span> : ''}</>
-            : <span className="ok">Done: {adopt.copied} items now use Target’s data in the hub ({adopt.total} checked{adopt.failed ? `, ${adopt.failed} failed` : ''}).</span>}
+            : <span className={adopt.copied ? 'ok' : 'warn'}>Done: {adopt.copied} items now use Target’s data in the hub · {adopt.fetched} read from Target · {adopt.total} checked{adopt.failed ? ` · ${adopt.failed} failed` : ''}.</span>}
           {adopt.lastError && <div className="bad">Last error: {adopt.lastError}</div>}
         </div></div>
       )}
