@@ -242,8 +242,14 @@ export async function refreshPending() {
 export async function unlistVariant(variantId: string) {
   const v = await db.query.variants.findFirst({ where: eq(schema.variants.id, variantId) });
   if (!v?.targetProductId) throw new Error('Item is not on Target yet');
-  if (v.listingStatus !== 'APPROVED') throw new Error(`Only APPROVED items can be unlisted (current: ${v.listingStatus ?? 'unknown'}). Refresh the status first.`);
-  const r = await T.unlistProduct(v.targetProductId);
+  // the LIVE version decides: an item can show "Rejected" (its latest update was rejected) while an older approved
+  // version is still selling. That live version can be unlisted. An item that was never approved is not on sale.
+  const prod = await T.getProduct(v.targetProductId);
+  const sts: any[] = prod?.product_statuses ?? [];
+  const live = sts.find((x) => x.current && x.listing_status === 'APPROVED') ?? sts.find((x) => x.listing_status === 'APPROVED');
+  if (sts.some((x) => x.current && x.listing_status === 'UNLISTED')) { await saveVariantFromTarget(v.id, prod); throw new Error('Already unlisted on Target'); }
+  if (!live) { await saveVariantFromTarget(v.id, prod); throw new Error(`Not live on Target (${latestStatus(prod)?.listing_status ?? v.listingStatus ?? 'unknown'}, never approved), so there is nothing to unlist. Turn Send OFF so it is not sent again.`); }
+  const r = live.current ? await T.unlistProduct(v.targetProductId) : await T.unlistByStatus(v.targetProductId, live.id);
   await saveVariantFromTarget(v.id, { ...r, id: v.targetProductId });
   return r;
 }

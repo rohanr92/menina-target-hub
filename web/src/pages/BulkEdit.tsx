@@ -513,12 +513,11 @@ export default function BulkEdit() {
           <button className="btn sm" style={{ background: '#6b7280', color: '#fff', borderColor: '#6b7280' }} onClick={() => setSend(selRows.map((r) => r.variantId), false)}>OFF</button>
           <button className="btn sm" title="ON, except sizes unlisted on Target" onClick={() => setSend(selRows.map((r) => r.variantId), null)}>Auto</button>
           <button className="btn sm" style={{ background: '#dc2626', color: '#fff', borderColor: '#dc2626' }} onClick={() => run('unlist', async () => {
-            const live = selRows.filter((r) => r.onTarget && r.listingStatus === 'APPROVED');
-            if (!live.length) throw new Error('None of the selected SKUs is Approved on Target (only approved items can be unlisted).');
-            if (!confirm(`Unlist ${live.length} SKU(s) from Target?${selRows.length > live.length ? `\n\n${selRows.length - live.length} selected SKU(s) are not Approved and are skipped.` : ''}\n\nTheir Send switch turns OFF so later updates don't list them again.`)) return null;
+            const live = selRows.filter((r) => r.onTarget && r.listingStatus !== 'UNLISTED');
+            if (!live.length) throw new Error('None of the selected SKUs can be unlisted (not on Target or already unlisted).');
+            if (!confirm(`Unlist ${live.length} SKU(s) from Target?\n\nApproved items, and rejected/pending items that still have a live approved version, are unlisted. Items that were never approved are not on sale, so they are only switched to Send OFF.\n\nSend turns OFF for all of them so later updates don't list them again.`)) return null;
             const r = await post('/api/bulk/unlist', { variantIds: live.map((x) => x.variantId) });
-            const ok = live.filter((x) => r.results.find((y: any) => y.sku === x.sku && y.ok)).map((x) => x.variantId);
-            if (ok.length) setSend(ok, false);
+            setSend(live.map((x) => x.variantId), false);
             return r;
           }, (r: any) => (r ? `${r.unlisted} unlisted${r.failed ? ` · ${r.failed} failed: ${r.results.filter((x: any) => !x.ok).slice(0, 3).map((x: any) => `${x.sku} (${x.error})`).join(', ')}` : ''}` : 'Cancelled')).then(reload)}>{busy === 'unlist' ? 'Unlisting…' : 'Unlist'}</button>
           <button className="btn sm primary" onClick={() => run('push', async () => {

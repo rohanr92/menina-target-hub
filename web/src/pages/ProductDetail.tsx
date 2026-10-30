@@ -177,7 +177,7 @@ export default function ProductDetail() {
                   <td>
                     <div className="row" style={{ gap: 4, justifyContent: 'flex-end' }}>
                       {v.targetProductId && <button className="btn sm" onClick={async () => setLive(await get(`/api/variants/${v.id}/target`))}>View on Target</button>}
-                      {v.targetProductId && v.listingStatus === 'APPROVED' && <button className="btn sm" onClick={() => confirm(`Unlist ${v.sku} from Target?`) && run('unlist', () => post(`/api/variants/${v.id}/unlist`), 'Unlisted').then(reloadAll)}>Unlist</button>}
+                      {v.targetProductId && v.listingStatus !== 'UNLISTED' && <button className="btn sm" onClick={() => confirm(`Unlist ${v.sku} from Target?`) && run('unlist', () => post(`/api/variants/${v.id}/unlist`), 'Unlisted').then(reloadAll)}>Unlist</button>}
                       <button className="btn ghost sm" onClick={() => run('ex', () => patch(`/api/variants/${v.id}`, { syncEnabled: !v.syncEnabled }), v.syncEnabled ? 'Excluded from Target' : 'Included').then(reloadAll)}>{v.syncEnabled ? 'Exclude' : 'Include'}</button>
                     </div>
                   </td>

@@ -89,7 +89,7 @@ function StockCard({ stock, sel, setSel, onlyProblems, setOnlyProblems, busy, ru
           <Btn size="sm" onClick={() => setBulkPrice(true)}>Price rule</Btn>
           <Btn size="sm" busy={busy === 'dis'} onClick={() => confirm(`Stop selling ${sel.size} SKU(s) on Target? Stock 0 is sent; the listing stays.`) && bulk('dis', '/api/bulk/disable', { disabled: true }, (r) => `${r.updated} SKU(s) disabled (stock 0)`)}>Disable</Btn>
           <Btn size="sm" busy={busy === 'en'} onClick={() => bulk('en', '/api/bulk/disable', { disabled: false }, (r) => `${r.updated} SKU(s) selling again`)}>Enable</Btn>
-          <Btn size="sm" kind="danger" busy={busy === 'unl'} onClick={() => confirm(`Unlist ${sel.size} SKU(s) on Target? (Only approved items can be unlisted.)`) && bulk('unl', '/api/bulk/unlist', {}, (r) => `${r.unlisted} unlisted${r.failed ? ` · ${r.failed} failed: ${r.results.filter((x: any) => !x.ok).slice(0, 3).map((x: any) => `${x.sku} (${x.error})`).join(', ')}` : ''}`)}>Unlist</Btn>
+          <Btn size="sm" kind="danger" busy={busy === 'unl'} onClick={() => confirm(`Unlist ${sel.size} SKU(s) on Target? (Items with a live approved version are unlisted; never-approved items are not on sale and are skipped.)`) && bulk('unl', '/api/bulk/unlist', {}, (r) => `${r.unlisted} unlisted${r.failed ? ` · ${r.failed} failed: ${r.results.filter((x: any) => !x.ok).slice(0, 3).map((x: any) => `${x.sku} (${x.error})`).join(', ')}` : ''}`)}>Unlist</Btn>
           <Btn size="sm" kind="ghost" onClick={() => setSel(new Set())}>Clear</Btn>
         </>}
       </div>
