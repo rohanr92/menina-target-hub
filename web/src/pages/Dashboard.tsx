@@ -48,7 +48,9 @@ export default function Dashboard() {
         <Link to="/orders" className="action tone-blue"><div className="num">{openOrders}</div><div><div className="t">Orders to process</div><div className="s">{d.orders.late ? `${d.orders.late} late · ` : ''}Acknowledge & ship</div></div></Link>
         <Link to="/listing-errors" className={`action ${attention ? 'tone-red' : 'tone-orange'}`}><div className="num">{attention}</div><div><div className="t">Items to fix</div><div className="s">Rejected or suspended</div></div></Link>
         <Link to="/products" className="action tone-green"><div className="num">{d.items.on_target}</div><div><div className="t">Items on Target</div><div className="s">{d.items.approved} approved · {d.items.pending} pending</div></div></Link>
-        <Link to="/test-plan" className="action tone-violet"><div className="num">{tpPct}%</div><div><div className="t">Test plan</div><div className="s">{d.testPlan.done} of {d.testPlan.partner} scenarios done</div></div></Link>
+        {d.env === 'stage'
+          ? <Link to="/test-plan" className="action tone-violet"><div className="num">{tpPct}%</div><div><div className="t">Test plan</div><div className="s">{d.testPlan.done} of {d.testPlan.partner} scenarios done</div></div></Link>
+          : <Link to="/bulk" className="action tone-violet"><div className="num">{d.items.unlisted}</div><div><div className="t">Unlisted items</div><div className="s">Listed again only when you send them</div></div></Link>}
       </div>
 
       <div className="grid4" style={{ marginBottom: 20 }}>
@@ -58,7 +60,7 @@ export default function Dashboard() {
         <div className="stat"><div className="label">Failed syncs</div><div className="value">{d.failedTasks}</div><div className="sub">last 24 hours · <Link to="/inventory">review</Link></div></div>
       </div>
 
-      <div className="grid3">
+      <div className={d.env === 'stage' ? 'grid3' : 'grid2'}>
         <Card title="Items on Target">
           <div className="list-row"><span>Total</span><Link to="/target-catalog">{d.items.on_target}</Link></div>
           <div className="list-row"><span>Approved</span><span className="v">{d.items.approved}</span></div>
@@ -67,17 +69,17 @@ export default function Dashboard() {
           <div className="list-row"><span>Unlisted</span><span className="v">{d.items.unlisted}</span></div>
           <div className="list-row"><span>Suspended</span><span className="v">{d.items.suspended}</span></div>
         </Card>
-        <Card title={`Setup · ${setupDone}/${STEPS.length}`}>
+        {d.env === 'stage' && <Card title={`Setup · ${setupDone}/${STEPS.length}`}>
           <div className="progress" style={{ marginBottom: 10 }}><div style={{ width: `${(setupDone / STEPS.length) * 100}%` }} /></div>
           <div className="checklist">
             {STEPS.map(([k, label, to]) => (
               <Link key={k} to={to}><span className={`check ${d.setup[k] ? 'done' : ''}`} /><span className={d.setup[k] ? 'muted' : ''}>{label}</span></Link>
             ))}
           </div>
-        </Card>
+        </Card>}
         <Card title="Automation">
           <div className="list-row"><span>Order pull</span><span className="v">{d.sync.ordersEnabled ? `every ${d.sync.ordersIntervalMin} min` : 'off'}</span></div>
-          <div className="list-row"><span>Stock sync</span><span className="v">{d.sync.inventoryEnabled ? `every ${d.sync.inventoryIntervalMin} min` : 'off'}</span></div>
+          <div className="list-row"><span>Stock sync</span><span className="v">{d.sync.inventoryEnabled ? 'instant (Shopify webhooks) + check every ' + d.sync.inventoryIntervalMin + ' min' : 'off'}</span></div>
           <div className="list-row"><span>Price sync</span><span className="v">{d.sync.priceEnabled ? 'on' : 'off'}</span></div>
           <div className="list-row"><span>Auto acknowledge</span><span className="v">{d.sync.autoAcknowledge ? 'on' : 'off'}</span></div>
           <div className="list-row"><span>Orders into Shopify</span><span className="v">{d.sync.pushOrdersToShopify ? 'on' : 'off'}</span></div>

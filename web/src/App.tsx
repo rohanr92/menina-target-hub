@@ -101,15 +101,19 @@ export default function App() {
     setUnauthorizedHandler(() => setAuthed(false));
     get('/api/auth/me').then(() => setAuthed(true)).catch(() => setAuthed(false));
   }, []);
+  const [env, setEnv] = useState<string | null>(null);
+  useEffect(() => { if (authed) get('/api/settings').then((s) => setEnv(s.activeEnv)).catch(() => {}); }, [authed]);
   if (authed === null) return null;
   if (!authed) return <Login onDone={() => setAuthed(true)} />;
+  // testing pages are only shown while on Stage
+  const nav = NAV.map(([g, links]) => [g, links.filter(([to]) => env === 'stage' || !['/test-plan', '/go-live'].includes(to))] as [string, [string, string][]]);
   return (
     <BrowserRouter>
       <div className="shell">
         <aside className="side">
           <div className="brand"><span className="mark" /><div>Target Hub<small>Menina Step</small></div></div>
           <nav className="nav">
-            {NAV.map(([group, links]) => (
+            {nav.map(([group, links]) => (
               <div key={group}>
                 <div className="nav-group">{group}</div>
                 {links.map(([to, label]) => <NavLink key={to} to={to} end={to === '/'}>{label}{to === '/orders' && <OrdersBadge />}</NavLink>)}
