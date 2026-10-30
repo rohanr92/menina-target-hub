@@ -40,7 +40,14 @@ async function saveParentFromTarget(productId: string, prod: any) {
   }).where(eq(schema.products.id, productId));
 }
 
-export interface PushOptions { allowWarnings?: boolean; force?: boolean; onlyNew?: boolean }
+export interface PushOptions { allowWarnings?: boolean; force?: boolean; onlyNew?: boolean; onlyVariantIds?: string[] }
+
+/** Send switch per SKU: explicit on/off, otherwise OFF for items unlisted on Target (an update would list them again). */
+export function sendEnabled(v: { overrides: any; listingStatus: string | null }) {
+  const s = (v.overrides as any)?._send;
+  if (s === true || s === false) return s;
+  return v.listingStatus !== 'UNLISTED';
+}
 
 /**
  * Send a product to Target.
@@ -51,10 +58,24 @@ export interface PushOptions { allowWarnings?: boolean; force?: boolean; onlyNew
 export async function pushProduct(productId: string, opts: PushOptions = {}) {
   const p0 = await db.query.products.findFirst({ where: eq(schema.products.id, productId) });
   const ovk = (p0?.overrides as any) ?? {};
-  if ([true, 'true'].includes(ovk._keep_target_content ?? ovk.keep_target_content)) {
-    return { ok: false, locked: true, error: 'Not sent: this product was already on Target, so the hub keeps the content that is on Target (stock and orders still sync). Turn off "Keep Target content" on the product page to send the hub version.', results: [], issues: [] };
-  }
-  const built = await buildProduct(productId);
+  const locked = [true, 'true'].includes(ovk._keep_target_content ?? ovk.keep_target_content);
+  const built0 = await buildProduct(productId);
+  // which items go out: the chosen SKUs, with the Send switch on; for existing (locked) items only when the
+  // hub already holds Target's own data for them, so nothing from Shopify replaces what is on Target
+  const vsAll = await db.select().from(schema.variants).where(eq(schema.variants.productId, productId));
+  const vById = new Map(vsAll.map((v) => [v.id, v]));
+  const skipped: any[] = [];
+  const items = built0.items.filter((it) => {
+    const v = it.variantId ? vById.get(it.variantId) : undefined;
+    if (!v) return true;
+    if (opts.onlyVariantIds?.length && !opts.onlyVariantIds.includes(v.id)) return false;
+    if (v.targetProductId && !sendEnabled(v)) { skipped.push({ sku: it.sku, action: 'skipped', reason: v.listingStatus === 'UNLISTED' ? 'unlisted on Target (Send is off)' : 'Send is off' }); return false; }
+    if (locked && v.targetProductId && !(v.overrides as any)?._from_target) { skipped.push({ sku: it.sku, action: 'skipped', reason: 'Target data not copied into the hub yet (Target catalog › 4)' }); return false; }
+    return true;
+  });
+  if (built0.items.length && !items.length) return { ok: !!skipped.length, results: skipped, issues: built0.issues, nothingToSend: true, error: skipped.length ? undefined : 'Nothing to send' };
+  const parentLocked = locked && !!p0?.targetParentId && !(p0?.overrides as any)?._from_target;
+  const built = { ...built0, items, issues: built0.issues.filter((i: any) => !i.scope || items.some((it) => i.scope.includes(it.sku)) || !built0.items.some((it) => i.scope.includes(it.sku))) };
   const errors = built.issues.filter((i) => i.level === 'error');
   if (errors.length && !opts.force) {
     return { ok: false, blocked: true, issues: built.issues };
@@ -62,7 +83,7 @@ export async function pushProduct(productId: string, opts: PushOptions = {}) {
   const p = (await db.query.products.findFirst({ where: eq(schema.products.id, productId) }))!;
   const vs = await db.select().from(schema.variants).where(eq(schema.variants.productId, productId));
   const byId = new Map(vs.map((v) => [v.id, v]));
-  const results: any[] = [];
+  const results: any[] = [...skipped];
   try {
     if (!built.parent) {
       for (const it of built.items) {
@@ -114,7 +135,7 @@ export async function pushProduct(productId: string, opts: PushOptions = {}) {
           }
         }
         await db.update(schema.products).set({ parentExternalId: built.parent.external_id }).where(eq(schema.products.id, productId));
-      } else if (!opts.onlyNew && p.targetParentId) {
+      } else if (!opts.onlyNew && p.targetParentId && !parentLocked) {
         const r = await T.updateProduct(p.targetParentId, built.parent);
         await saveParentFromTarget(productId, { ...r, id: r?.id ?? p.targetParentId });
         results.push({ sku: built.parent.external_id, action: 'parent updated' });
@@ -194,15 +215,16 @@ export async function fillMissingTcins(productId?: string) {
 export async function refreshAllStatuses() {
   const catalog = await T.getCatalog({ expand: 'product_statuses' });
   const byExt = new Map(catalog.map((c: any) => [c.external_id, c]));
+  const byId = new Map(catalog.map((c: any) => [c.id, c]));
   const vs = await db.select().from(schema.variants);
   let updated = 0;
   for (const v of vs) {
-    const c = (v.targetProductId && catalog.find((x: any) => x.id === v.targetProductId)) || (v.sku ? byExt.get(v.sku) : null);
+    const c: any = (v.targetProductId && byId.get(v.targetProductId)) || (v.sku ? byExt.get(v.sku) : null);
     if (c && c.relationship_type !== 'VAP') { await saveVariantFromTarget(v.id, c); updated++; }
   }
   const ps = await db.select().from(schema.products).where(or(isNotNull(schema.products.parentExternalId), isNotNull(schema.products.targetParentId)));
   for (const p of ps) {
-    const c = (p.targetParentId && catalog.find((x: any) => x.id === p.targetParentId)) || (p.parentExternalId ? byExt.get(p.parentExternalId) : null);
+    const c: any = (p.targetParentId && byId.get(p.targetParentId)) || (p.parentExternalId ? byExt.get(p.parentExternalId) : null);
     if (c) { await saveParentFromTarget(p.id, c); updated++; }
   }
   return { catalogItems: catalog.length, updated };

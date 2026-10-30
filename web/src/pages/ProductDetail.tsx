@@ -95,7 +95,7 @@ export default function ProductDetail() {
             save({ overrides: { ...Object.fromEntries(Object.entries(p.overrides ?? {}).filter(([k]) => k !== 'keep_target_content')), _keep_target_content: e.target.checked } }, e.target.checked ? 'Keeping Target content' : 'Hub content can be sent now');
           }} /> Keep Target content
         </label>
-        <Btn kind="primary" busy={busy === 'push'} disabled={keepTarget} title={keepTarget ? 'Locked: this product keeps the content already on Target' : ''} onClick={() => push(false)}>{onTarget ? 'Send update to Target' : 'Send to Target'}</Btn>
+        <Btn kind="primary" busy={busy === 'push'} title={keepTarget ? 'Existing item: only SKUs whose Target data is in the hub are sent; unlisted SKUs are skipped' : ''} onClick={() => push(false)}>{onTarget ? 'Send update to Target' : 'Send to Target'}</Btn>
       </PageHead>
 
       <div className="grid3" style={{ marginBottom: 16 }}>

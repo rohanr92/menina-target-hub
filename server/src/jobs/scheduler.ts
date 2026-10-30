@@ -4,7 +4,7 @@ import { db, schema } from '../db/index.js';
 import { pruneLogs } from '../lib/apilog.js';
 import { getSync } from '../lib/settings.js';
 import { refreshVariantsFromShopify } from '../services/catalog.js';
-import { refreshPending } from '../services/items.js';
+import { refreshAllStatuses, refreshPending } from '../services/items.js';
 import { pollOrders, syncReturnsToShopify, syncTrackingFromShopify } from '../services/orders.js';
 import { refreshOpenReports } from '../services/reports.js';
 import { enqueueMany, startWorker } from '../services/sync.js';
@@ -62,6 +62,8 @@ export function startScheduler() {
     await tick('returns', 60, s.ordersEnabled && s.returnsToShopify, syncReturnsToShopify);
     await tick('inventory', s.inventoryIntervalMin, s.inventoryEnabled || s.priceEnabled, reconcileInventoryAndPrice);
     await tick('item-status', s.statusIntervalMin, true, refreshPending);
+    // every item's listing status from Target, several times a day (Target has no push notifications)
+    await tick('item-status-all', 180, true, refreshAllStatuses);
     await tick('reports', 2, true, refreshOpenReports);
     await tick('cleanup', 24 * 60, true, async () => {
       await pruneLogs(30);

@@ -185,10 +185,13 @@ export default async function (app: FastifyInstance) {
     return pushProduct((req.params as any).id, { force, onlyNew });
   });
   app.post('/api/products/push-many', async (req) => {
-    const { ids } = req.body as { ids: string[] };
+    const { ids, variantIds } = req.body as { ids: string[]; variantIds?: string[] };
     const out: any[] = [];
-    for (const id of ids ?? []) out.push({ id, ...(await pushProduct(id)) });
-    return out.map((r) => ({ id: r.id, ok: r.ok, blocked: (r as any).blocked, error: (r as any).error, errors: r.issues?.filter((i: any) => i.level === 'error').length }));
+    for (const id of ids ?? []) out.push({ id, ...(await pushProduct(id, { onlyVariantIds: variantIds })) });
+    return out.map((r) => ({
+      id: r.id, ok: r.ok, blocked: (r as any).blocked, error: (r as any).error, errors: r.issues?.filter((i: any) => i.level === 'error').length,
+      sent: (r.results ?? []).filter((x: any) => x.action !== 'skipped').length, skipped: (r.results ?? []).filter((x: any) => x.action === 'skipped'),
+    }));
   });
   app.post('/api/products/:id/refresh', async (req) => refreshProductStatus((req.params as any).id));
   app.post('/api/products/refresh-all', async () => runJob('catalog-refresh', refreshAllStatuses));

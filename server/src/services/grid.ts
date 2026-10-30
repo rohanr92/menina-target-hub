@@ -9,6 +9,7 @@ import { NONE, attrKey, buildProduct, detectOptions, detectTheme, loadTaxo, matc
 import { descriptionWithoutList, normalize, stripHtml } from './text.js';
 import { parseCsv, syncAttributes, syncValues } from './taxonomy.js';
 import { importAllowedItemTypes, refreshReport, requestReport } from './reports.js';
+import { sendEnabled } from './items.js';
 
 export type Section = 'listing' | 'variation' | 'required' | 'images' | 'bullets' | 'optional';
 export interface GridColumn {
@@ -87,7 +88,7 @@ export interface GridRow {
   variantId: string; productId: string; sku: string; productTitle: string; variantTitle: string; options: Record<string, string>;
   image: string | null; productImages: string[]; price: string | null; compareAtPrice: string | null; inventory: number;
   barcode: string | null; mockBarcode: string | null; itemTypeId: string | null; itemTypeName: string | null;
-  theme: string; level: 'SA' | 'VC'; listingStatus: string | null; validationStatus: string | null; tcin: string | null; onTarget: boolean;
+  theme: string; level: 'SA' | 'VC'; listingStatus: string | null; validationStatus: string | null; tcin: string | null; onTarget: boolean; send?: boolean; sendAuto?: boolean;
   syncEnabled: boolean; values: Record<string, string>; sources: Record<string, string>; sourceText: Record<string, string>; errors: string[]; warnings: number;
 }
 
@@ -168,7 +169,7 @@ export async function buildRows(prods: Product[], vs: Variant[]): Promise<GridRo
         price: v.price, compareAtPrice: v.compareAtPrice, inventory: v.inventory, barcode: v.barcode, mockBarcode: v.mockBarcode,
         itemTypeId: p.itemTypeId, itemTypeName: p.itemTypeId ? typeName.get(p.itemTypeId) ?? p.itemTypeId : null,
         theme, level: theme === 'SA' ? 'SA' : 'VC', listingStatus: v.listingStatus, validationStatus: v.validationStatus, tcin: v.tcin,
-        onTarget: !!v.targetProductId, syncEnabled: v.syncEnabled, values, sources, sourceText,
+        onTarget: !!v.targetProductId, syncEnabled: v.syncEnabled, send: sendEnabled(v), sendAuto: (v.overrides as any)?._send === undefined, values, sources, sourceText,
         errors: myIssues.filter((i) => i.level === 'error').map((i) => i.message), warnings: myIssues.filter((i) => i.level === 'warning').length,
       });
     }

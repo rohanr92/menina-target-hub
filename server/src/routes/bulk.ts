@@ -125,6 +125,15 @@ export default async function (app: FastifyInstance) {
     return { updated: ids.length, rule: mode === 'web' ? null : { mode, value }, sent: sync.priceEnabled };
   });
 
+  /** Send switch: true = send to Target, false = never send, null = automatic (off when unlisted on Target). */
+  app.post('/api/bulk/send-flag', async (req) => {
+    const b = req.body as any;
+    const ids = await idsFrom(b);
+    const val = b.send === true || b.send === false ? b.send : null;
+    await setOverride(ids, (ov) => { if (val === null) delete ov._send; else ov._send = val; return ov; });
+    return { updated: ids.length, send: val };
+  });
+
   /** Unlist on Target (approved items only). */
   app.post('/api/bulk/unlist', async (req) => {
     const ids = await idsFrom(req.body);

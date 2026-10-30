@@ -9,7 +9,7 @@ type Row = {
   variantId: string; productId: string; sku: string; productTitle: string; variantTitle: string; options: Record<string, string>;
   image: string | null; productImages: string[]; price: string | null; inventory: number; barcode: string | null; mockBarcode: string | null;
   itemTypeId: string | null; itemTypeName: string | null; theme: string; level: string; listingStatus: string | null; tcin: string | null;
-  onTarget: boolean; values: Record<string, string>; sources: Record<string, string>; sourceText: Record<string, string>; errors: string[]; warnings: number;
+  onTarget: boolean; send?: boolean; sendAuto?: boolean; values: Record<string, string>; sources: Record<string, string>; sourceText: Record<string, string>; errors: string[]; warnings: number;
 };
 
 const NONE = '(none)';
@@ -446,6 +446,7 @@ export default function BulkEdit() {
     <div className="page page-wide">
       <PageHead title="Bulk mapping" sub="Every SKU in one grid. Fill Target fields one by one, select rows to set many at once, let Auto-map fill them from Shopify, or work in Excel and upload.">
         <Btn onClick={() => setAutoOpen(true)}>✨ Auto-map</Btn>
+        <Btn busy={busy === 'stat'} title="Reads every item's listing status from Target (also runs by itself every 3 hours)" onClick={() => run('stat', () => post('/api/products/refresh-all'), (r: any) => `Target status updated for ${r.updated} items`).then(reload)}>↻ Target status</Btn>
         <div className="menu-wrap">
           <Btn disabled={!typed} title={typed ? '' : 'Pick an item type tab first'} onClick={() => setSheetOpen(!sheetOpen)}>Download sheet ▾</Btn>
           {sheetOpen && typed && (
@@ -492,11 +493,17 @@ export default function BulkEdit() {
           <span style={{ flex: 1 }} />
           <button className="btn sm" onClick={() => setAutoOpen(true)}>Auto-map selected</button>
           <button className="btn sm" onClick={() => setImages({ rows: selRows, cols: imageCols, bulk: true })} disabled={!selRows.length}>Set images</button>
-          <button className="btn sm" onClick={() => run('push', async () => {
-            const ids = [...new Set(selRows.map((r) => r.productId))];
-            if (!confirm(`Send ${ids.length} product(s) to Target now?`)) return null;
-            return post('/api/products/push-many', { ids });
-          }, (r: any) => (r ? `${r.filter((x: any) => x.ok).length} sent · ${r.filter((x: any) => x.blocked).length} blocked by errors · ${r.filter((x: any) => x.error).length} failed` : 'Cancelled')).then(reload)}>{busy === 'push' ? 'Sending…' : 'Send to Target'}</button>
+          <button className="btn sm" onClick={() => run('sf', () => post('/api/bulk/send-flag', { variantIds: selRows.map((r) => r.variantId), send: true }), (r: any) => `Send ON for ${r.updated} SKU(s)`).then(reload)}>Send: on</button>
+          <button className="btn sm" onClick={() => run('sf', () => post('/api/bulk/send-flag', { variantIds: selRows.map((r) => r.variantId), send: false }), (r: any) => `Send OFF for ${r.updated} SKU(s)`).then(reload)}>Send: off</button>
+          <button className="btn sm" title="On, except items unlisted on Target" onClick={() => run('sf', () => post('/api/bulk/send-flag', { variantIds: selRows.map((r) => r.variantId), send: null }), (r: any) => `Send set to automatic for ${r.updated} SKU(s)`).then(reload)}>Send: auto</button>
+          <button className="btn sm primary" onClick={() => run('push', async () => {
+            const on = selRows.filter((r) => r.send !== false);
+            const off = selRows.length - on.length;
+            const ids = [...new Set(on.map((r) => r.productId))];
+            if (!on.length) throw new Error('All selected SKUs have Send off (unlisted on Target or switched off).');
+            if (!confirm(`Send ${on.length} SKU(s) of ${ids.length} product(s) to Target now?${off ? `\n\n${off} selected SKU(s) have Send off (unlisted or switched off) and will NOT be sent.` : ''}`)) return null;
+            return post('/api/products/push-many', { ids, variantIds: on.map((r) => r.variantId) });
+          }, (r: any) => (r ? `${r.reduce((a: number, x: any) => a + (x.sent ?? 0), 0)} SKU(s) sent · ${r.reduce((a: number, x: any) => a + (x.skipped?.length ?? 0), 0)} skipped · ${r.filter((x: any) => x.blocked).length} blocked by errors · ${r.filter((x: any) => x.error).length} failed${r.find((x: any) => x.error) ? `: ${r.find((x: any) => x.error).error}` : ''}` : 'Cancelled')).then(reload)}>{busy === 'push' ? 'Sending…' : 'Send to Target'}</button>
           <button className="btn sm" onClick={() => setSel(new Set())}>Clear</button>
         </div>
       )}
@@ -557,7 +564,12 @@ export default function BulkEdit() {
                       </div>
                     </td>
                     <td className="num">{money(r.price)}<div className="small muted">{r.inventory} in stock</div></td>
-                    <td><Status value={r.listingStatus ?? (r.onTarget ? 'SENT' : null)} /></td>
+                    <td><Status value={r.listingStatus ?? (r.onTarget ? 'SENT' : null)} />
+                      {r.onTarget && <label className="small" style={{ display: 'flex', gap: 4, alignItems: 'center', marginTop: 4, whiteSpace: 'nowrap' }} title={r.sendAuto ? 'Automatic: off when unlisted on Target' : 'Set by you'}>
+                        <input type="checkbox" checked={r.send !== false} onChange={(e) => run('sf', () => post('/api/bulk/send-flag', { variantIds: [r.variantId], send: e.target.checked }), e.target.checked ? 'Send on' : 'Send off').then(reload)} />
+                        <span className={r.send === false ? 'muted' : ''}>Send{r.sendAuto ? '' : ' (set)'}</span>
+                      </label>}
+                    </td>
                     <td className="small mono">{r.tcin ?? '—'}</td>
                     <td>
                       <select className={!r.itemTypeId ? 'cell missing' : 'cell'} value={r.itemTypeId ?? ''} onChange={(e) => saveCell(r, '__itemType', e.target.value)}>
