@@ -54,6 +54,8 @@ export default function Inventory() {
 function StockCard({ stock, sel, setSel, onlyProblems, setOnlyProblems, busy, run, reload }: any) {
   const [q, setQ] = useState('');
   const [bulkPrice, setBulkPrice] = useState(false);
+  const [priceFor, setPriceFor] = useState<any>(null);
+  const [stockFor, setStockFor] = useState<any>(null);
   const d = stock.data;
   if (stock.loading && !d) return <Card title="Stock on Target"><Loading /></Card>;
   if (!d) return null;
@@ -66,8 +68,6 @@ function StockCard({ stock, sel, setSel, onlyProblems, setOnlyProblems, busy, ru
   const hay = (r: any) => [r.sku, r.tcin, r.title, ...Object.values(r.options ?? {})].filter(Boolean).join(' ').toLowerCase();
   const optHit = (r: any, w: string) => Object.values(r.options ?? {}).some((x: any) => String(x).toLowerCase() === w);
   const rows = rowsAll.filter((r) => (!onlyProblems || problem(r)) && words.every((w) => optHit(r, w) || hay(r).includes(w)));
-  const [priceFor, setPriceFor] = useState<any>(null);
-  const [stockFor, setStockFor] = useState<any>(null);
   const ids = [...sel];
   const bulk = (key: string, path: string, body: any, msg: (r: any) => string) => run(key, () => post(path, { variantIds: ids, ...body }), msg).then(() => setTimeout(reload, 2500));
   const toggle = (id: string) => { const n = new Set(sel); n.has(id) ? n.delete(id) : n.add(id); setSel(n); };
