@@ -127,7 +127,7 @@ function StockCard({ stock, sel, setSel, onlyProblems, setOnlyProblems, busy, ru
       </div>
 
       <div className="card"><div className="card-b small" style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'center' }}>
-        <span><b>Stock:</b> {d.inventoryEnabled ? <span className="ok">automatic — instant on Shopify changes, full check every {d.intervalMin} min</span> : <span className="bad">off</span>}</span>
+        <span><b>Stock:</b> {d.inventoryEnabled ? <span className="ok">automatic — instant on Shopify changes, full check every {d.intervalMin} min{d.lastCheck ? ` (last check ${ago(d.lastCheck)})` : ''}</span> : <span className="bad">off</span>}. Only changes are sent; “sent … ago” is the last time the number changed.</span>
         <span><b>Price:</b> {d.priceEnabled ? <span className="ok">automatic — Shopify web price by default (compare-at = list, price = sale), sent when it changes</span> : <span className="bad">off — nothing is sent</span>}</span>
         <span className="muted">Warehouse: {dcs.map((x) => x.name).join(', ') || '—'} · <Link to="/settings">Settings</Link></span>
       </div></div>
@@ -195,7 +195,7 @@ function StockCard({ stock, sel, setSel, onlyProblems, setOnlyProblems, busy, ru
                         : r.task?.status === 'pending' || r.task?.status === 'running' ? <span className="muted">sending…</span>
                         : !r.sentAt ? <span className="bad">never sent</span>
                         : want !== sent ? <span className="warn">→ {want} next</span>
-                        : <span className="muted">{ago(r.sentAt)}</span>}
+                        : <span className="muted" title="Last time this number changed and was sent. Unchanged numbers are not re-sent.">sent {ago(r.sentAt)}</span>}
                     </div>
                     {r.stockFixed && <div className="small muted">fixed by hand</div>}
                   </td>

@@ -93,6 +93,7 @@ export default async function (app: FastifyInstance) {
       });
     }
     return {
+      lastCheck: ((await db.execute(sql`SELECT max(started_at) AS at FROM job_runs WHERE job = 'inventory' AND status = 'ok'`)).rows[0] as any)?.at ?? null,
       inventoryEnabled: sync.inventoryEnabled, priceEnabled: sync.priceEnabled, intervalMin: sync.inventoryIntervalMin, safetyStock: sync.safetyStock,
       shopifyConnected: !!shop.accessToken, locationMap: shop.locationMap ?? {}, distributionCenters: dcs.map((d) => ({ id: d.id, name: d.name })),
       planError, rows,
