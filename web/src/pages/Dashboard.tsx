@@ -1,41 +1,78 @@
-import { Link } from 'react-router-dom';
+import { useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { get, post } from '../lib/api';
-import { ago } from '../lib/format';
-import { Btn, Card, ErrorBox, Loading, Status, useAction, useLoad } from '../components/ui';
-
-const STEPS: [string, string, string][] = [
-  ['targetCredentials', 'Add Target API credentials', '/settings'],
-  ['shopify', 'Connect Shopify', '/settings'],
-  ['itemTypes', 'Load allowed item types', '/taxonomy'],
-  ['attributes', 'Pull attributes + value lists', '/taxonomy'],
-  ['distributionCenters', 'Pull warehouses + shipping methods', '/taxonomy'],
-  ['products', 'Import products from Shopify', '/products'],
-  ['mapped', 'Set item types + map attributes', '/products'],
-  ['onTarget', 'Send your first items to Target', '/products'],
-];
+import { money } from '../lib/format';
+import { Btn, Card, ErrorBox, Loading, useAction, useLoad } from '../components/ui';
 
 function greeting() {
   const h = new Date().getHours();
   return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
 }
+const short = (n: number) => (n >= 1000 ? `$${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : `$${Math.round(n)}`);
+
+function SalesChart({ daily, metric }: { daily: { day: string; orders: number; sales: number }[]; metric: 'sales' | 'orders' }) {
+  const [hover, setHover] = useState<number | null>(null);
+  const vals = daily.map((d) => (metric === 'sales' ? d.sales : d.orders));
+  const max = Math.max(1, ...vals);
+  const W = 720, H = 200, pad = 26, bw = (W - pad) / daily.length;
+  const h = hover != null ? daily[hover] : null;
+  return (
+    <div style={{ position: 'relative' }}>
+      <svg viewBox={`0 0 ${W} ${H + 24}`} style={{ width: '100%', height: 'auto', display: 'block' }} onMouseLeave={() => setHover(null)}>
+        {[0, 0.5, 1].map((t) => (
+          <g key={t}>
+            <line x1={pad} x2={W} y1={H - t * (H - 10)} y2={H - t * (H - 10)} stroke="#eef0f4" />
+            <text x={0} y={H - t * (H - 10) + 4} fontSize="10" fill="#94a3b8">{metric === 'sales' ? short(max * t) : Math.round(max * t)}</text>
+          </g>
+        ))}
+        {daily.map((d, i) => {
+          const v = vals[i]; const bh = (v / max) * (H - 10);
+          return (
+            <g key={d.day} onMouseEnter={() => setHover(i)}>
+              <rect x={pad + i * bw} y={0} width={bw} height={H} fill="transparent" />
+              <rect x={pad + i * bw + bw * 0.18} y={H - bh} width={bw * 0.64} height={Math.max(bh, v ? 2 : 0)} rx={3} fill={hover === i ? '#4338ca' : '#6366f1'} opacity={hover == null || hover === i ? 1 : 0.55} />
+              {(i % 5 === 0 || i === daily.length - 1) && <text x={pad + i * bw + bw / 2} y={H + 16} fontSize="10" fill="#94a3b8" textAnchor="middle">{new Date(d.day + 'T12:00:00').toLocaleDateString([], { month: 'short', day: 'numeric' })}</text>}
+            </g>
+          );
+        })}
+      </svg>
+      {h && (
+        <div style={{ position: 'absolute', top: 0, right: 0, background: '#0f172a', color: '#fff', borderRadius: 8, padding: '6px 10px', fontSize: 12 }}>
+          <b>{new Date(h.day + 'T12:00:00').toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}</b> · {money(h.sales)} · {h.orders} order{h.orders === 1 ? '' : 's'}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const statusChip = (s: string) => {
+  const m: Record<string, [string, string, string]> = {
+    RELEASED_FOR_SHIPMENT: ['New', '#fef3c7', '#92400e'], ACKNOWLEDGED_BY_SELLER: ['Unfulfilled', '#fef9c3', '#854d0e'],
+    PARTIALLY_SHIPPED: ['Partial', '#ffedd5', '#9a3412'], SHIPPED: ['Fulfilled', '#e5e7eb', '#374151'], CANCELED: ['Canceled', '#fee2e2', '#991b1b'],
+  };
+  const [l, bg, fg] = m[s] ?? [s, '#f3f4f6', '#374151'];
+  return <span style={{ padding: '2px 9px', borderRadius: 999, background: bg, color: fg, fontSize: 11.5, fontWeight: 600 }}>{l}</span>;
+};
 
 export default function Dashboard() {
-  const { data, error, loading, reload } = useLoad(() => get('/api/dashboard'));
+  const v2 = useLoad(() => get('/api/dashboard/v2'));
+  const v1 = useLoad(() => get('/api/dashboard'));
   const { busy, run } = useAction();
-  if (loading && !data) return <div className="page"><Loading /></div>;
-  if (error) return <div className="page"><ErrorBox error={error} /></div>;
-  const d = data!;
-  const openOrders = d.orders.released + d.orders.acknowledged + d.orders.partial;
-  const attention = d.items.rejected + d.items.suspended;
-  const tpPct = d.testPlan.partner ? Math.round((d.testPlan.done / d.testPlan.partner) * 100) : 0;
-  const setupDone = STEPS.filter(([k]) => d.setup[k]).length;
+  const [metric, setMetric] = useState<'sales' | 'orders'>('sales');
+  const nav = useNavigate();
+  if (v2.loading && !v2.data) return <div className="page"><Loading /></div>;
+  if (v2.error) return <div className="page"><ErrorBox error={v2.error} /></div>;
+  const d: any = v2.data; const k = d.kpi; const old: any = v1.data;
+  const reload = () => { v2.reload(); v1.reload(); };
+  const wow = k.sales_prev7 ? Math.round(((k.sales7 - k.sales_prev7) / k.sales_prev7) * 100) : null;
+  const crit = (d.alerts ?? []).filter((a: any) => a.severity === 'critical');
 
   return (
     <div className="page">
       <div className="page-head">
         <div>
           <h1>{greeting()}, Yago</h1>
-          <p>Here’s what’s happening on Target Plus ({d.env === 'stage' ? 'stage, testing' : 'production'})</p>
+          <p>Target Plus · {old?.env === 'stage' ? 'stage (testing)' : 'live'} · {new Date().toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}</p>
         </div>
         <div className="row">
           <Btn busy={busy === 'orders'} onClick={() => run('orders', () => post('/api/orders/poll'), (r: any) => `${r.released} released order(s), ${r.created} new`).then(reload)}>Pull orders</Btn>
@@ -43,61 +80,93 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div className="section-label">Take action</div>
-      <div className="grid4" style={{ marginBottom: 20 }}>
-        <Link to="/orders" className="action tone-blue"><div className="num">{openOrders}</div><div><div className="t">Orders to process</div><div className="s">{d.orders.late ? `${d.orders.late} late · ` : ''}Acknowledge & ship</div></div></Link>
-        <Link to="/listing-errors" className={`action ${attention ? 'tone-red' : 'tone-orange'}`}><div className="num">{attention}</div><div><div className="t">Items to fix</div><div className="s">Rejected or suspended</div></div></Link>
-        <Link to="/products" className="action tone-green"><div className="num">{d.items.on_target}</div><div><div className="t">Items on Target</div><div className="s">{d.items.approved} approved · {d.items.pending} pending</div></div></Link>
-        {d.env === 'stage'
-          ? <Link to="/test-plan" className="action tone-violet"><div className="num">{tpPct}%</div><div><div className="t">Test plan</div><div className="s">{d.testPlan.done} of {d.testPlan.partner} scenarios done</div></div></Link>
-          : <Link to="/bulk" className="action tone-violet"><div className="num">{d.items.unlisted}</div><div><div className="t">Unlisted items</div><div className="s">Listed again only when you send them</div></div></Link>}
+      {(crit.length > 0 || d.holds > 0) && (
+        <div style={{ background: '#fff1f2', border: '1px solid #fecdd3', borderRadius: 14, padding: '12px 16px', marginBottom: 18 }}>
+          {crit.slice(0, 3).map((a: any) => (
+            <div key={a.id} style={{ display: 'flex', alignItems: 'center', padding: '3px 0' }}><span className="sev critical" />{a.link ? <Link to={a.link} style={{ fontWeight: 600 }}>{a.title}</Link> : <b>{a.title}</b>}</div>
+          ))}
+          {d.holds > 0 && <div style={{ display: 'flex', alignItems: 'center', padding: '3px 0' }}><span className="sev warning" /><Link to="/inventory" style={{ fontWeight: 600 }}>{d.holds} price drop(s) waiting for your approval</Link></div>}
+          {(crit.length > 3) && <Link to="/alerts" className="small">See all alerts →</Link>}
+        </div>
+      )}
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 14, marginBottom: 18 }}>
+        <div className="kpi"><div className="l">Sales today</div><div className="v">{money(k.sales_today)}</div><div className="s">{k.orders_today} order{k.orders_today === 1 ? '' : 's'}</div></div>
+        <div className="kpi"><div className="l">Last 7 days</div><div className="v">{money(k.sales7)}</div><div className="s">{wow == null ? 'no data for the week before' : <><span className={wow >= 0 ? 'up' : 'down'}>{wow >= 0 ? '▲' : '▼'} {Math.abs(wow)}%</span> vs previous 7 days</>}</div></div>
+        <div className="kpi"><div className="l">Last 30 days</div><div className="v">{money(k.sales30)}</div><div className="s">{k.orders30} orders · {k.units30} units{k.orders30 ? ` · avg ${money(k.sales30 / k.orders30)}` : ''}</div></div>
+        <button className="kpi" style={{ textAlign: 'left', cursor: 'pointer' }} onClick={() => nav('/orders')}>
+          <div className="l">Orders to ship</div><div className="v" style={{ color: k.late ? '#b91c1c' : undefined }}>{k.open}</div>
+          <div className="s">{k.late ? <span className="down">{k.late} late</span> : 'none late'}{k.due24 ? ` · ${k.due24} due in 24h` : ''}</div>
+        </button>
+        <button className="kpi" style={{ textAlign: 'left', cursor: 'pointer' }} onClick={() => nav('/inventory')}>
+          <div className="l">Live on Target</div><div className="v">{d.items.live}</div>
+          <div className="s">{d.items.live_in_stock} in stock · {d.items.rejected ? <span className="down">{d.items.rejected} rejected</span> : '0 rejected'}</div>
+        </button>
       </div>
 
-      <div className="grid4" style={{ marginBottom: 20 }}>
-        <div className="stat"><div className="label">Products in hub</div><div className="value">{d.products.total}</div><div className="sub">{d.products.unmapped} without item type</div></div>
-        <div className="stat"><div className="label">Ship today</div><div className="value">{d.orders.due_soon}</div><div className="sub">due in the next 24h</div></div>
-        <div className="stat"><div className="label">API errors</div><div className="value">{d.errors24h}</div><div className="sub">last 24 hours · <Link to="/logs">view log</Link></div></div>
-        <div className="stat"><div className="label">Failed syncs</div><div className="value">{d.failedTasks}</div><div className="sub">last 24 hours · <Link to="/inventory">review</Link></div></div>
-      </div>
+      <Card title={<div style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%' }}>
+        <span>{metric === 'sales' ? 'Sales' : 'Orders'} · last 30 days</span><span style={{ flex: 1 }} />
+        <div className="seg" style={{ display: 'inline-flex', background: '#f1f5f9', borderRadius: 8, padding: 2 }}>
+          {(['sales', 'orders'] as const).map((m) => <button key={m} onClick={() => setMetric(m)} style={{ border: 0, cursor: 'pointer', padding: '4px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600, background: metric === m ? '#fff' : 'transparent', boxShadow: metric === m ? '0 1px 2px rgba(0,0,0,.08)' : undefined }}>{m === 'sales' ? 'Sales' : 'Orders'}</button>)}
+        </div>
+      </div>}>
+        <SalesChart daily={d.daily} metric={metric} />
+      </Card>
 
-      <div className={d.env === 'stage' ? 'grid3' : 'grid2'}>
-        <Card title="Items on Target">
-          <div className="list-row"><span>Total</span><Link to="/target-catalog">{d.items.on_target}</Link></div>
-          <div className="list-row"><span>Approved</span><span className="v">{d.items.approved}</span></div>
-          <div className="list-row"><span>Pending review</span><span className="v">{d.items.pending}</span></div>
-          <div className="list-row"><span>Rejected</span><span className="v" style={{ color: d.items.rejected ? 'var(--bad)' : undefined }}>{d.items.rejected}</span></div>
-          <div className="list-row"><span>Unlisted</span><span className="v">{d.items.unlisted}</span></div>
-          <div className="list-row"><span>Suspended</span><span className="v">{d.items.suspended}</span></div>
+      <div className="grid2" style={{ marginTop: 18 }}>
+        <Card title="Best sellers · 30 days">
+          {d.topSellers.length === 0 ? <div className="empty small">No sales in the last 30 days yet.</div> : d.topSellers.map((t: any, i: number) => (
+            <div className="mini-row" key={t.tcin ?? i}>
+              <span className="small muted" style={{ width: 16 }}>{i + 1}</span>
+              {t.image ? <img className="mini-thumb" src={t.image} alt="" onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = 'hidden'; }} /> : <div className="mini-thumb" />}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: 13.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.productId ? <Link to={`/products/${t.productId}`}>{t.title}</Link> : t.title}</div>
+                <div className="small muted">{t.options || t.sku}{t.inventory != null ? ` · ${t.inventory} left` : ''}</div>
+              </div>
+              <div style={{ textAlign: 'right' }}><div style={{ fontWeight: 700 }}>{t.units} sold</div><div className="small muted">{money(t.sales)}</div></div>
+            </div>
+          ))}
         </Card>
-        {d.env === 'stage' && <Card title={`Setup · ${setupDone}/${STEPS.length}`}>
-          <div className="progress" style={{ marginBottom: 10 }}><div style={{ width: `${(setupDone / STEPS.length) * 100}%` }} /></div>
-          <div className="checklist">
-            {STEPS.map(([k, label, to]) => (
-              <Link key={k} to={to}><span className={`check ${d.setup[k] ? 'done' : ''}`} /><span className={d.setup[k] ? 'muted' : ''}>{label}</span></Link>
-            ))}
-          </div>
-        </Card>}
-        <Card title="Automation">
-          <div className="list-row"><span>Order pull</span><span className="v">{d.sync.ordersEnabled ? `every ${d.sync.ordersIntervalMin} min` : 'off'}</span></div>
-          <div className="list-row"><span>Stock sync</span><span className="v">{d.sync.inventoryEnabled ? 'instant (Shopify webhooks) + check every ' + d.sync.inventoryIntervalMin + ' min' : 'off'}</span></div>
-          <div className="list-row"><span>Price sync</span><span className="v">{d.sync.priceEnabled ? 'on' : 'off'}</span></div>
-          <div className="list-row"><span>Auto acknowledge</span><span className="v">{d.sync.autoAcknowledge ? 'on' : 'off'}</span></div>
-          <div className="list-row"><span>Orders into Shopify</span><span className="v">{d.sync.pushOrdersToShopify ? 'on' : 'off'}</span></div>
-          <div style={{ marginTop: 10 }}><Link to="/settings" className="small">Change in Settings →</Link></div>
+        <Card title="Running low on selling items">
+          {d.lowStock.length === 0 ? <div className="empty small">No selling item is running low. 👍</div> : d.lowStock.map((t: any, i: number) => (
+            <div className="mini-row" key={i}>
+              {t.image ? <img className="mini-thumb" src={t.image} alt="" onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = 'hidden'; }} /> : <div className="mini-thumb" />}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: 13.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.product_id ? <Link to={`/products/${t.product_id}`}>{t.title}</Link> : t.title}</div>
+                <div className="small muted">{t.options || t.sku} · sold {t.units} in 30 days</div>
+              </div>
+              <span style={{ padding: '2px 9px', borderRadius: 999, background: t.inventory > 0 ? '#ffedd5' : '#fee2e2', color: t.inventory > 0 ? '#9a3412' : '#991b1b', fontSize: 12, fontWeight: 700 }}>{t.inventory > 0 ? `${t.inventory} left` : 'Sold out'}</span>
+            </div>
+          ))}
         </Card>
       </div>
 
-      <div style={{ marginTop: 20 }}>
-        <Card title="Background jobs" pad={false}>
-          <table>
-            <thead><tr><th>Job</th><th>Status</th><th>Last run</th><th>Result</th></tr></thead>
-            <tbody>
-              {d.jobs.length === 0 && <tr><td colSpan={4} className="empty">No jobs yet</td></tr>}
-              {d.jobs.map((j: any) => (
-                <tr key={j.job}><td><strong>{j.job}</strong></td><td><Status value={j.status} /></td><td className="muted">{ago(j.started_at)}</td><td className="small muted" style={{ maxWidth: 420, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{j.message}</td></tr>
-              ))}
-            </tbody>
-          </table>
+      <div className="grid3" style={{ marginTop: 18 }}>
+        <Card title="Latest orders" actions={<Link to="/orders" className="small">All orders →</Link>}>
+          {d.recent.length === 0 ? <div className="empty small">No orders yet.</div> : d.recent.map((o: any) => (
+            <div className="mini-row" key={o.id} style={{ cursor: 'pointer' }} onClick={() => nav(`/orders/${encodeURIComponent(o.id)}`)}>
+              <div style={{ flex: 1 }}><div style={{ fontWeight: 600 }}>#{o.order_number}</div><div className="small muted">{o.order_date ? new Date(o.order_date).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : ''}</div></div>
+              {statusChip(o.status)}<b style={{ width: 80, textAlign: 'right' }}>{money(o.total)}</b>
+            </div>
+          ))}
+        </Card>
+        <Card title="Items on Target" actions={<Link to="/inventory" className="small">Manage →</Link>}>
+          {[['Live', d.items.live, '#16a34a'], ['Pending review', d.items.pending, '#d97706'], ['Rejected', d.items.rejected, '#dc2626'], ['Unlisted', d.items.unlisted, '#6b7280']].map(([l, n, c]: any) => {
+            const tot = Math.max(1, d.items.live + d.items.pending + d.items.rejected + d.items.unlisted);
+            return (
+              <div key={l} style={{ padding: '7px 0' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}><span>{l}</span><b>{n}</b></div>
+                <div style={{ height: 6, background: '#f1f5f9', borderRadius: 6, marginTop: 4 }}><div style={{ width: `${(n / tot) * 100}%`, height: '100%', background: c, borderRadius: 6 }} /></div>
+              </div>
+            );
+          })}
+        </Card>
+        <Card title="Automation" actions={<Link to="/settings" className="small">Settings →</Link>}>
+          {[['Orders pulled & acknowledged', d.sync.orders], ['Orders created in Shopify', d.sync.shopifyOrders], ['Stock sync (instant)', d.sync.inventory], ['Price sync', d.sync.price]].map(([l, on]: any) => (
+            <div key={l} className="list-row"><span>{l}</span><span style={{ fontWeight: 700, color: on ? '#16a34a' : '#9ca3af' }}>{on ? '● On' : '○ Off'}</span></div>
+          ))}
+          {old && <div className="list-row"><span>Sync problems (24h)</span><span className="v" style={{ color: old.failedTasks ? '#b91c1c' : undefined }}>{old.failedTasks}</span></div>}
+          {old && <div className="list-row"><span>API errors (24h)</span><span className="v">{old.errors24h} · <Link to="/logs">log</Link></span></div>}
         </Card>
       </div>
     </div>

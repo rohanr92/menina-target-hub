@@ -19,10 +19,17 @@ export async function runJob<T>(job: string, fn: () => Promise<T>): Promise<T> {
   const [run] = await db.insert(schema.jobRuns).values({ job, status: 'running' }).returning();
   try {
     const result = await fn();
+    if (['orders', 'tracking', 'inventory', 'returns', 'item-status-all'].includes(job)) await (await import('../services/alerts.js')).resolve('job-failed', job).catch(() => null);
     await db.update(schema.jobRuns).set({ status: 'ok', message: JSON.stringify(result ?? null).slice(0, 2000), finishedAt: new Date() }).where(eq(schema.jobRuns.id, run.id));
     return result;
   } catch (e: any) {
     await db.update(schema.jobRuns).set({ status: 'error', message: String(e?.message ?? e).slice(0, 2000), finishedAt: new Date() }).where(eq(schema.jobRuns.id, run.id));
+    if (['orders', 'tracking', 'inventory', 'returns', 'item-status-all'].includes(job)) {
+      const { raise } = await import('../services/alerts.js');
+      const msg = String(e?.message ?? e);
+      const conn = /401|403|token|oauth|unauthor|ECONN|ENOTFOUND|fetch failed/i.test(msg);
+      await raise({ kind: 'job-failed', severity: conn || job === 'orders' ? 'critical' : 'warning', ref: job, title: conn ? `Connection problem: ${job} sync failed` : `${job} sync failed`, detail: msg.slice(0, 400), link: '/' }).catch(() => null);
+    }
     throw e;
   } finally {
     busy.delete(job);
@@ -62,6 +69,14 @@ export function startScheduler() {
     await tick('returns', 60, s.ordersEnabled && s.returnsToShopify, syncReturnsToShopify);
     await tick('inventory', s.inventoryIntervalMin, s.inventoryEnabled || s.priceEnabled, reconcileInventoryAndPrice);
     await tick('item-status', s.statusIntervalMin, true, refreshPending);
+    // alerts: late / due orders, orders not in Shopify, problems on open orders
+    await tick('alerts', 10, s.ordersEnabled, async () => (await import('../services/alerts.js')).checkOrderAlerts());
+    // morning summary to Slack (once a day at the chosen UTC hour)
+    {
+      const { getAlertSettings, dailySummary } = await import('../services/alerts.js');
+      const a = await getAlertSettings().catch(() => null);
+      if (a?.slackWebhookUrl && a.dailySummaryHourUtc != null && new Date().getUTCHours() === a.dailySummaryHourUtc) await tick('daily-summary', 23 * 60, true, dailySummary);
+    }
     // every item's listing status from Target, several times a day (Target has no push notifications)
     await tick('item-status-all', 180, true, refreshAllStatuses);
     await tick('reports', 2, true, refreshOpenReports);

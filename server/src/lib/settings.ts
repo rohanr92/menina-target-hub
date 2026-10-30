@@ -61,6 +61,8 @@ export interface SyncSettings {
   returnsToShopify: boolean;
   /** put returned units back in Shopify stock when refunding */
   restockReturns: boolean;
+  /** hold (do not send) a price that drops more than this % at once, until approved; 0 = off */
+  priceGuardPct: number;
   price: {
     listFrom: 'compare_at_or_price' | 'price';
     offerFrom: 'price' | 'none';
@@ -96,6 +98,7 @@ export const defaultSync: SyncSettings = {
   ordersCutoverAt: null,
   returnsToShopify: true,
   restockReturns: false,
+  priceGuardPct: 40,
   price: { listFrom: 'compare_at_or_price', offerFrom: 'price', mapFrom: 'none', multiplier: 1, roundTo99: false },
   stage: { forceBrand: 'Valor Fitness', useMockBarcodes: true, allowShopifyWrites: false },
   defaultLogistics: { is_add_on: 'No', two_day_shipping_eligible: 'No', shipping_exclusion: 'No', seller_return_policy: '' },

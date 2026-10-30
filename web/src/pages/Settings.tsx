@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { get, post, put } from '../lib/api';
+import { get, patch, post, put } from '../lib/api';
 import { dt } from '../lib/format';
 import { Btn, Card, Copy, ErrorBox, Field, Loading, PageHead, Tabs, useAction, useLoad, useToast } from '../components/ui';
 
@@ -188,6 +188,7 @@ function SyncForm({ s, reload }: { s: any; reload: () => void }) {
             <Field label="Buffer for all items (units held back per SKU, usually 0)" hint="Per-SKU buffer: Price & inventory › select SKUs › Buffer"><input type="number" value={f.safetyStock} onChange={(e) => set('safetyStock', Number(e.target.value))} /></Field>
             <Field label="Max quantity per item (optional)"><input type="number" value={f.maxQtyPerItem ?? ''} onChange={(e) => set('maxQtyPerItem', e.target.value === '' ? null : Number(e.target.value))} /></Field>
             {chk('reserveOpenOrders', 'Hold back stock for open Target orders not yet in Shopify')}
+            <Field label="Price guard: hold a price drop bigger than (%)" hint="A bigger drop at once is NOT sent; it waits for your approval on Price & inventory. 0 = off."><input type="number" min={0} max={95} value={f.priceGuardPct ?? 40} onChange={(e) => set('priceGuardPct', Number(e.target.value))} /></Field>
             <Field label="List price from"><select value={f.price.listFrom} onChange={(e) => set('price.listFrom', e.target.value)}><option value="compare_at_or_price">Compare-at price (if higher), else price</option><option value="price">Price</option></select></Field>
             <Field label="Offer (sale) price"><select value={f.price.offerFrom} onChange={(e) => set('price.offerFrom', e.target.value)}><option value="price">Shopify price when lower than list</option><option value="none">Don’t send</option></select></Field>
             <Field label="MAP price"><select value={f.price.mapFrom} onChange={(e) => set('price.mapFrom', e.target.value)}><option value="none">Don’t send</option><option value="price">Shopify price</option></select></Field>
@@ -254,7 +255,7 @@ function SyncForm({ s, reload }: { s: any; reload: () => void }) {
 
 export default function Settings() {
   const { data, error, loading, reload } = useLoad(() => get('/api/settings'));
-  const [tab, setTab] = useState<'stage' | 'production' | 'shopify' | 'hub' | 'sync'>('stage');
+  const [tab, setTab] = useState<'stage' | 'production' | 'shopify' | 'hub' | 'sync' | 'team'>('stage');
   const toast = useToast();
   useEffect(() => {
     const q = new URLSearchParams(location.search);
@@ -266,11 +267,79 @@ export default function Settings() {
   return (
     <div className="page">
       <PageHead title="Settings" sub="Keys and tokens are entered here and stored encrypted in the database. They never go into the code, GitHub or Railway variables." />
-      <Tabs value={tab} onChange={setTab} items={[['stage', 'Target · Stage'], ['production', 'Target · Production'], ['shopify', 'Shopify'], ['hub', 'Marketplace Hub'], ['sync', 'Sync & rules']]} />
+      <Tabs value={tab} onChange={setTab} items={[['stage', 'Target · Stage'], ['production', 'Target · Production'], ['shopify', 'Shopify'], ['hub', 'Marketplace Hub'], ['sync', 'Sync & rules'], ['team', 'Team & alerts']]} />
       {(tab === 'stage' || tab === 'production') && <TargetEnvForm key={tab} env={tab} s={data} oauthCallbackUrl={data.oauthCallbackUrl} reload={reload} />}
       {tab === 'shopify' && <ShopifyForm s={data} reload={reload} />}
       {tab === 'hub' && <HubForm s={data} reload={reload} />}
       {tab === 'sync' && <SyncForm s={data} reload={reload} />}
+      {tab === 'team' && <TeamForm />}
+    </div>
+  );
+}
+
+function TeamForm() {
+  const users = useLoad(() => get('/api/users').catch((e) => { if (/admin/i.test(e.message)) return null; throw e; }));
+  const al = useLoad(() => get('/api/settings/alerts'));
+  const { busy, run } = useAction();
+  const [nu, setNu] = useState<any>({ email: '', name: '', password: '', role: 'staff' });
+  const [pw, setPw] = useState({ current: '', password: '' });
+  const [slack, setSlack] = useState('');
+  const a: any = al.data;
+  return (
+    <div className="stack">
+      <div className="grid2">
+        <Card title="Team members">
+          {users.data === null ? <div className="small muted">Only admins can manage users.</div> : users.loading ? <Loading /> : (
+            <div className="stack">
+              <table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Last sign-in</th><th></th></tr></thead><tbody>
+                {(users.data ?? []).length === 0 && <tr><td colSpan={5} className="empty small">No personal logins yet; everyone uses the team password.</td></tr>}
+                {(users.data ?? []).map((u: any) => (
+                  <tr key={u.id} style={{ opacity: u.active ? 1 : 0.5 }}>
+                    <td>{u.name ?? '—'}</td><td className="small">{u.email}</td>
+                    <td><select value={u.role} onChange={(e) => run('r' + u.id, () => patch(`/api/users/${u.id}`, { role: e.target.value }), 'Role changed').then(users.reload)}><option value="staff">Staff</option><option value="admin">Admin</option></select></td>
+                    <td className="small muted">{u.last_login_at ? dt(u.last_login_at) : 'never'}</td>
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      <button className="btn sm ghost" onClick={() => { const p = prompt(`New password for ${u.email} (at least 10 characters)`); if (p) run('p' + u.id, () => patch(`/api/users/${u.id}`, { password: p }), 'Password changed'); }}>Reset password</button>
+                      <button className="btn sm ghost" onClick={() => run('a' + u.id, () => patch(`/api/users/${u.id}`, { active: !u.active }), u.active ? 'User turned off' : 'User turned on').then(users.reload)}>{u.active ? 'Turn off' : 'Turn on'}</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody></table>
+              <div className="small" style={{ fontWeight: 600, marginTop: 6 }}>Add a team member</div>
+              <div className="grid2">
+                <Field label="Name"><input value={nu.name} onChange={(e) => setNu({ ...nu, name: e.target.value })} /></Field>
+                <Field label="Email (their login)"><input type="email" value={nu.email} onChange={(e) => setNu({ ...nu, email: e.target.value })} /></Field>
+                <Field label="Password (10+ characters)"><input type="password" value={nu.password} onChange={(e) => setNu({ ...nu, password: e.target.value })} /></Field>
+                <Field label="Role" hint="Admin: can manage users and alert settings"><select value={nu.role} onChange={(e) => setNu({ ...nu, role: e.target.value })}><option value="staff">Staff</option><option value="admin">Admin</option></select></Field>
+              </div>
+              <div><Btn kind="primary" busy={busy === 'add'} onClick={() => run('add', () => post('/api/users', nu), 'User added').then((r) => { if (r) { setNu({ email: '', name: '', password: '', role: 'staff' }); users.reload(); } })}>Add user</Btn></div>
+            </div>
+          )}
+        </Card>
+        <Card title="Alerts to Slack">
+          {!a ? <Loading /> : (
+            <div className="stack">
+              <div className="small muted">Create an “Incoming webhook” in Slack (Slack › Apps › Incoming Webhooks › Add to a channel), copy its URL and paste it here. Late orders, held prices, shipment problems and connection problems are posted to that channel, plus a morning summary.</div>
+              <Field label="Slack webhook URL" hint={a.hasSlack ? 'Saved. Paste a new one to replace it.' : 'Not connected'}><input value={slack} placeholder={a.hasSlack ? '•••••• saved' : 'https://hooks.slack.com/services/…'} onChange={(e) => setSlack(e.target.value)} /></Field>
+              <Field label="Send to Slack"><select defaultValue={a.slackMinSeverity ?? 'warning'} id="al-sev"><option value="critical">Only critical (late orders, connection problems)</option><option value="warning">Warnings and critical (recommended)</option><option value="info">Everything</option></select></Field>
+              <Field label="Morning summary at (UTC hour, empty = off)" hint="13 UTC = 9 AM Miami · 7 PM Dhaka"><input type="number" min={0} max={23} defaultValue={a.dailySummaryHourUtc ?? ''} id="al-hour" /></Field>
+              <div className="row">
+                <Btn kind="primary" busy={busy === 'als'} onClick={() => run('als', () => put('/api/settings/alerts', { ...(slack ? { slackWebhookUrl: slack } : {}), slackMinSeverity: (document.getElementById('al-sev') as HTMLSelectElement).value, dailySummaryHourUtc: (document.getElementById('al-hour') as HTMLInputElement).value }), 'Alert settings saved').then(() => { setSlack(''); al.reload(); })}>Save</Btn>
+                <Btn busy={busy === 'alt'} disabled={!a.hasSlack} onClick={() => run('alt', () => post('/api/alerts/test'), (r: any) => (r.sent ? 'Test message sent to Slack' : 'Slack did not accept it. Check the URL.'))}>Send test</Btn>
+                <Btn busy={busy === 'sum'} disabled={!a.hasSlack} onClick={() => run('sum', () => post('/api/alerts/summary-now'), (r: any) => (r.sent ? 'Summary sent' : 'Could not send'))}>Send summary now</Btn>
+              </div>
+            </div>
+          )}
+        </Card>
+      </div>
+      <Card title="My password">
+        <div className="row" style={{ gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <div style={{ width: 220 }}><Field label="Current password"><input type="password" value={pw.current} onChange={(e) => setPw({ ...pw, current: e.target.value })} /></Field></div>
+          <div style={{ width: 220 }}><Field label="New password (10+ characters)"><input type="password" value={pw.password} onChange={(e) => setPw({ ...pw, password: e.target.value })} /></Field></div>
+          <Btn busy={busy === 'mypw'} onClick={() => run('mypw', () => post('/api/me/password', pw), 'Password changed').then((r) => r && setPw({ current: '', password: '' }))}>Change password</Btn>
+        </div>
+        <div className="small muted" style={{ marginTop: 6 }}>Only for personal logins (email + password). The team password is set in Railway (APP_PASSWORD).</div>
+      </Card>
     </div>
   );
 }

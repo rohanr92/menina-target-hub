@@ -22,6 +22,13 @@
       "when": 1791613532919,
       "tag": "0002_target_catalog",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1793000000000,
+      "tag": "0003_ops",
+      "breakpoints": true
     }
   ]
 }

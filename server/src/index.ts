@@ -10,6 +10,10 @@ import { env } from './lib/env.js';
 import { runMigrations } from './db/index.js';
 import { sign, unsign, safeEqual } from './lib/crypto.js';
 import { registerRoutes } from './routes/index.js';
+import { sql } from 'drizzle-orm';
+import { db } from './db/index.js';
+import { audit, redact } from './services/alerts.js';
+import { checkPassword } from './routes/admin.js';
 import { seedScenarios } from './services/testplan.js';
 import { startScheduler } from './jobs/scheduler.js';
 
@@ -45,18 +49,46 @@ async function main() {
     if (!path.startsWith('/api')) return;
     if (open.some((p) => path!.startsWith(p))) return;
     const raw = unsign(req.cookies[SESSION_COOKIE]);
-    const exp = raw ? Number(raw.split(':')[1]) : 0;
+    const parts = raw ? raw.split(':') : [];
+    // "team:<exp>" (shared password, acts as admin) or "u:<userId>:<exp>" (personal login)
+    const exp = parts[0] === 'u' ? Number(parts[2]) : Number(parts[1]);
     if (!raw || !exp || exp < Date.now()) return reply.code(401).send({ error: 'Not signed in' });
+    if (parts[0] === 'u') {
+      const u = (await db.execute(sql`SELECT id, email, name, role, active FROM users WHERE id = ${Number(parts[1])}`)).rows[0] as any;
+      if (!u || !u.active) return reply.code(401).send({ error: 'Not signed in' });
+      (req as any).actor = { id: u.id, name: u.name || u.email, email: u.email, role: u.role };
+    } else (req as any).actor = { id: null, name: 'admin (shared password)', role: 'admin' };
+  });
+  // activity log: every change made in the hub (who, what, result); secrets are masked
+  app.addHook('onResponse', async (req, reply) => {
+    if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return;
+    const url = req.url.split('?')[0];
+    if (!url.startsWith('/api/') || url.startsWith('/api/webhooks/') || url.startsWith('/api/auth/') || url === '/api/alerts/seen') return;
+    const a = (req as any).actor;
+    await audit(a?.name ?? 'unknown', `${req.method} ${req.routeOptions?.url ?? url}`, url, redact(req.body), reply.statusCode);
   });
 
   app.post('/api/auth/login', async (req, reply) => {
-    const { password } = (req.body ?? {}) as { password?: string };
-    if (!password || !safeEqual(password, env.appPassword)) {
-      await new Promise((r) => setTimeout(r, 600));
-      return reply.code(401).send({ error: 'Wrong password' });
-    }
+    const { password, email } = (req.body ?? {}) as { password?: string; email?: string };
     const exp = Date.now() + SESSION_DAYS * 864e5;
-    reply.setCookie(SESSION_COOKIE, sign(`team:${exp}`), {
+    let token: string | null = null;
+    if (email && password) {
+      const u = (await db.execute(sql`SELECT id, password_hash, active FROM users WHERE email = ${String(email).trim().toLowerCase()}`)).rows[0] as any;
+      if (u?.active && checkPassword(password, u.password_hash)) {
+        token = `u:${u.id}:${exp}`;
+        await db.execute(sql`UPDATE users SET last_login_at = now() WHERE id = ${u.id}`);
+        await audit(String(email).toLowerCase(), 'sign in', null, null, 200);
+      }
+    } else if (password && safeEqual(password, env.appPassword)) {
+      token = `team:${exp}`;
+      await audit('admin (shared password)', 'sign in', null, null, 200);
+    }
+    if (!token) {
+      await new Promise((r) => setTimeout(r, 600));
+      await audit(email ? String(email).toLowerCase() : 'shared password', 'failed sign in', null, null, 401);
+      return reply.code(401).send({ error: email ? 'Wrong email or password' : 'Wrong password' });
+    }
+    reply.setCookie(SESSION_COOKIE, sign(token), {
       path: '/', httpOnly: true, sameSite: 'lax', secure: env.isProd, maxAge: SESSION_DAYS * 86400,
     });
     return { ok: true };
@@ -65,7 +97,7 @@ async function main() {
     reply.clearCookie(SESSION_COOKIE, { path: '/' });
     return { ok: true };
   });
-  app.get('/api/auth/me', async () => ({ ok: true }));
+  app.get('/api/auth/me', async (req) => ({ ok: true, user: (req as any).actor ?? null }));
   app.get('/api/health', async () => ({ ok: true, time: new Date().toISOString() }));
 
   app.setErrorHandler((err: any, _req, reply) => {

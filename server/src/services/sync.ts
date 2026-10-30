@@ -125,6 +125,23 @@ async function runTask(task: typeof schema.syncTasks.$inferSelect) {
     const problems = priceIssues(price);
     if (problems.length) throw new Error(problems.join('; '));
     if (!force && JSON.stringify(v.lastPriceSent) === JSON.stringify(price)) return { skipped: 'unchanged', price };
+    // price guard: a big drop at once is held for approval (protects against a Shopify typo going live)
+    const guard = Number((await getSync()).priceGuardPct ?? 40);
+    const eff = (p: any) => (p ? Number(p.offer_price ?? p.list_price) : 0);
+    const before = eff(v.lastPriceSent), after = eff(price);
+    const key = JSON.stringify(price);
+    if (guard > 0 && before > 0 && after < before * (1 - guard / 100) && (v.overrides as any)?._price_ok !== key) {
+      const dropPct = Math.round((1 - after / before) * 1000) / 10;
+      const ex = await db.execute(sql`SELECT id, status FROM price_holds WHERE variant_id = ${v.id} AND status IN ('held','rejected') AND proposed = ${key}::jsonb LIMIT 1`);
+      if ((ex.rows[0] as any)?.status === 'rejected') return { skipped: 'price drop rejected by you; Target keeps the current price', price };
+      if (!ex.rows.length) {
+        await db.execute(sql`UPDATE price_holds SET status = 'replaced' WHERE variant_id = ${v.id} AND status = 'held'`);
+        await db.execute(sql`INSERT INTO price_holds (variant_id, sku, current, proposed, drop_pct) VALUES (${v.id}, ${v.sku}, ${JSON.stringify(v.lastPriceSent)}::jsonb, ${key}::jsonb, ${dropPct})`);
+        const { raise } = await import('./alerts.js');
+        await raise({ kind: 'price-hold', severity: 'warning', ref: v.id, title: `Price drop held: ${v.sku} $${before.toFixed(2)} → $${after.toFixed(2)} (−${dropPct}%)`, detail: 'Not sent to Target. Approve or reject it on Price & inventory.', link: '/inventory' });
+      }
+      return { held: true, dropPct, price };
+    }
     const res = await T.setPrice(v.targetProductId, price!);
     await db.update(schema.variants).set({ lastPriceSent: price, lastPriceSentAt: new Date() }).where(eq(schema.variants.id, v.id));
     return { sent: price, res };

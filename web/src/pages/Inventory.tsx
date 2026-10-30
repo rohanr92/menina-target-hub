@@ -20,6 +20,7 @@ export default function Inventory() {
         <Btn busy={busy === 'force'} onClick={() => confirm('Re-send price and inventory for every item, even if unchanged?') && run('force', () => post('/api/sync/run', { kind: 'all', force: true }), (r: any) => `Queued ${r.queued} items`).then(s.reload)}>Re-send everything</Btn>
         <Btn kind="ghost" onClick={s.reload}>Refresh</Btn>
       </PageHead>
+      <HoldsCard onChange={() => { stock.reload(); }} />
       <div style={{ marginBottom: 16 }}><StockCard stock={stock} sel={sel} setSel={setSel} onlyProblems={onlyProblems} setOnlyProblems={setOnlyProblems}
         busy={busy} run={run} reload={() => { stock.reload(); s.reload(); settings.reload(); }} /></div>
       <div className="grid4" style={{ marginBottom: 16 }}>
@@ -284,5 +285,40 @@ function BulkPriceModal({ count, onClose, onApply }: { count: number; onClose: (
         <div className="row"><Btn kind="primary" disabled={mode !== 'web' && value === ''} onClick={() => onApply({ mode, value: Number(value), clearManual })}>Apply</Btn><Btn kind="ghost" onClick={onClose}>Cancel</Btn></div>
       </div>
     </Modal>
+  );
+}
+
+/** Price drops bigger than the guard % wait here instead of going to Target. */
+function HoldsCard({ onChange }: { onChange: () => void }) {
+  const h = useLoad(() => get('/api/price-holds'));
+  const { busy, run } = useAction();
+  const list: any[] = h.data ?? [];
+  if (!list.length) return null;
+  const eff = (p: any) => (p ? Number(p.offer_price ?? p.list_price) : 0);
+  const act = (ok: boolean, ids: number[]) => run(ok ? 'ap' : 'rj', () => post(`/api/price-holds/${ok ? 'approve' : 'reject'}`, { ids }), ok ? 'Approved, sending to Target' : 'Rejected: Target keeps the current price').then(() => { h.reload(); onChange(); });
+  return (
+    <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 14, padding: 14, marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
+        <b>⚠ {list.length} price drop(s) held — not sent to Target yet</b>
+        <span className="small muted">A drop bigger than the price guard (Settings › Sync & rules) waits for you. Approve if it is intended.</span>
+        <span style={{ flex: 1 }} />
+        <Btn size="sm" busy={busy === 'ap'} onClick={() => confirm(`Approve all ${list.length} price drops and send them to Target?`) && act(true, list.map((x) => x.id))}>Approve all</Btn>
+        <Btn size="sm" kind="ghost" busy={busy === 'rj'} onClick={() => act(false, list.map((x) => x.id))}>Reject all</Btn>
+      </div>
+      <div className="table-wrap"><table>
+        <thead><tr><th>Product</th><th className="num">On Target now</th><th className="num">New price</th><th className="num">Drop</th><th></th></tr></thead>
+        <tbody>
+          {list.slice(0, 50).map((x) => (
+            <tr key={x.id}>
+              <td><Link to={`/products/${x.product_id}`} style={{ fontWeight: 600 }}>{x.title ?? x.sku}</Link><div className="small muted">{Object.values(x.options ?? {}).join(' · ')} · {x.sku}</div></td>
+              <td className="num">${eff(x.current).toFixed(2)}</td>
+              <td className="num"><b>${eff(x.proposed).toFixed(2)}</b></td>
+              <td className="num bad">−{x.drop_pct}%</td>
+              <td style={{ whiteSpace: 'nowrap' }}><button className="btn sm" onClick={() => act(true, [x.id])}>Approve</button> <button className="btn sm ghost" onClick={() => act(false, [x.id])}>Reject</button></td>
+            </tr>
+          ))}
+        </tbody>
+      </table></div>
+    </div>
   );
 }
