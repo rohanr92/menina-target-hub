@@ -5,6 +5,7 @@ import { ago, money } from '../lib/format';
 import { Btn, Card, Copy, ErrorBox, Field, Json, Loading, Modal, PageHead, Status, Tabs, useAction, useLoad } from '../components/ui';
 import MappingView from '../components/MappingView';
 import ImagesEditor from '../components/ImagesEditor';
+import ContentEditor from '../components/ContentEditor';
 
 // settings kept in product.overrides that are not Target fields (edited elsewhere on this page)
 const HIDDEN_OV = ['_image_plan', '_keep_target_content', 'keep_target_content', '_from_target'];
@@ -189,6 +190,7 @@ export default function ProductDetail() {
         </Card>
       )}
 
+      {tab === 'content' && p.itemTypeId && <div style={{ marginBottom: 18 }}><ContentEditor productId={id!} onSaved={reloadAll} /></div>}
       {tab === 'content' && (
         <div className="grid2">
           <Card title="Feature bullets" actions={<Btn size="sm" kind="primary" onClick={() => save({ bullets: bullets.split('\n') }, 'Bullets saved')}>Save</Btn>}>

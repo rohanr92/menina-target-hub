@@ -78,7 +78,7 @@ const autoDesc = (key: string) => AUTO_DESC[key] ?? (/bullets\[/.test(key) ? 'pr
 // Logistics attributes are never part of item content (sent via product_logistics after creation)
 const LOGISTICS_KEYS = new Set(['fulfillment.is_add_on', 'fulfillment.two_day_shipping_eligible', 'shipping_exclusion', 'seller_return_policy']);
 const SA_FORBIDDEN = [/^variation\.theme$/, /^child_variations\./, /^descriptions\.parent_title$/, /^digital_assets\.images\.parent_image_url$/];
-const NEVER_ON_PARENT = [/^barcode\.value$/, /^descriptions\.title$/, /^child_variations\./];
+export const NEVER_ON_PARENT = [/^barcode\.value$/, /^descriptions\.title$/, /^child_variations\./];
 export const SOURCE_FIELDS = [
   'product.title', 'product.vendor', 'product.productType', 'product.handle', 'product.description',
   'variant.sku', 'variant.barcode', 'variant.weightLb', 'variant.size', 'variant.color', 'variant.title', 'variant.price',
@@ -122,6 +122,8 @@ interface Ctx {
   sizeKeys: string[]; // the item type's own size fields (e.g. "Shoe Size"), used for the title
   /** Keep Target content + this item was copied from Target: send exactly Target's fields, add nothing automatic. */
   strict?: boolean;
+  /** Suggestion mode: ignore every saved value and Target copy, build only from Shopify + mapping. */
+  fresh?: boolean;
   /** Parent fields as Target has them (to tell Target's parent data apart from your own product edits). */
   parentOnTarget?: Map<string, string>;
   src?: string; original?: string; // set by resolve(): where the value came from
@@ -245,12 +247,16 @@ export const attrKey = (a: Attribute) => a.mappedProperty || a.attributeId;
 /** Resolve one attribute value for an item. Returns raw string (may contain "|" for multi-values). */
 function resolve(key: string, rule: MappingRule | undefined, c: Ctx): string | undefined {
   c.original = undefined;
-  const vov = (c.v?.overrides as any)?.[key];
-  const ov = vov ?? (c.p.overrides as any)?.[key];
+  const vov = c.fresh ? undefined : (c.v?.overrides as any)?.[key];
+  const ov = c.fresh ? undefined : vov ?? (c.p.overrides as any)?.[key];
   // stage only accepts the test brand, even if you typed your real brand on the SKU (your brand still goes in the title)
   if (key === 'brands.name' && c.stage && c.forceBrand) { c.src = 'Stage rule (Target requires Valor Fitness)'; return c.forceBrand; }
   if (ov === NONE) { c.src = 'Left empty on purpose'; return undefined; }
   if (c.strict) {
+    // a field you edited for the whole product (Content editor) goes to every size and color
+    const edited = ((c.p.overrides as any)?._edited ?? []) as string[];
+    const pe = (c.p.overrides as any)?.[key];
+    if (edited.includes(key) && pe !== undefined && pe !== null && pe !== '') { c.src = 'Your edit (all sizes & colors)'; return Array.isArray(pe) ? pe.join('|') : String(pe); }
     // existing Target item kept as it is on Target: only its own Target fields (plus your edits), never automatic extras
     if (vov !== undefined && vov !== null && vov !== '') { c.src = (c.v?.overrides as any)?._from_target ? 'From Target (existing item)' : 'Override (this variant)'; return Array.isArray(vov) ? vov.join('|') : String(vov); }
     const pov = (c.p.overrides as any)?.[key];
@@ -304,7 +310,7 @@ function pushField(fields: Field[], key: string, raw: string, attr: Attribute | 
   }
 }
 
-export async function buildProduct(productId: string, opts: { checkOff?: boolean } = {}): Promise<BuildResult> {
+export async function buildProduct(productId: string, opts: { checkOff?: boolean; fresh?: boolean } = {}): Promise<BuildResult> {
   const p = await db.query.products.findFirst({ where: eq(schema.products.id, productId) });
   if (!p) throw new Error('Product not found');
   const vs = (await db.select().from(schema.variants).where(eq(schema.variants.productId, productId)))
@@ -373,10 +379,10 @@ export async function buildProduct(productId: string, opts: { checkOff?: boolean
     const t = await db.query.targetItems.findFirst({ where: eq(schema.targetItems.id, p.targetParentId) });
     for (const f of ((t?.fields ?? []) as { name: string; value: any }[])) if (f?.name && f.value != null && f.value !== '') parentOnTarget.set(f.name, Array.isArray(f.value) ? f.value.join('|') : String(f.value));
   }
-  const strictFor = (v: Variant | null, level: Ctx['level']) => locked && !!(level === 'VAP' ? (p.overrides as any)?._from_target : (v?.overrides as any)?._from_target);
+  const strictFor = (v: Variant | null, level: Ctx['level']) => !opts.fresh && locked && !!(level === 'VAP' ? (p.overrides as any)?._from_target : (v?.overrides as any)?._from_target);
 
   const ctxFor = (v: Variant | null, level: Ctx['level']): Ctx => ({
-    strict: strictFor(v, level), parentOnTarget,
+    strict: strictFor(v, level), parentOnTarget, fresh: !!opts.fresh,
     p, v, vs, level, theme, itemTypeName: itemType.name, stage, forceBrand: sync.stage.forceBrand, images, useMock: sync.stage.useMockBarcodes, titles: sync.titles, sizeValues: sync.sizeValues ?? {}, sizeKeys,
     size: v && sizeOption ? String((v.options as any)[sizeOption] ?? '') : '',
     color: v && colorOption ? String((v.options as any)[colorOption] ?? '') : '',

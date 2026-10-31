@@ -7,6 +7,7 @@ import { shopifyGraphql } from '../shopify/client.js';
 import { unlistVariant } from '../services/items.js';
 import { enqueue } from '../services/sync.js';
 import { fillFromListedSize } from '../services/grid.js';
+import { contentEditor, saveContent } from '../services/contentEditor.js';
 import { adoptAllTargetData, adoptProgress, autoItemTypesFromTarget, resetProductToTarget } from '../services/targetCatalog.js';
 
 const bad = (msg: string, code = 400) => Object.assign(new Error(msg), { statusCode: code });
@@ -82,6 +83,10 @@ export default async function (app: FastifyInstance) {
   app.post('/api/target-catalog/adopt', async (req) => adoptAllTargetData({ force: !!(req.body as any)?.force, reset: !!(req.body as any)?.reset }));
   app.post('/api/products/:id/reset-to-target', async (req) => resetProductToTarget((req.params as any).id));
   app.get('/api/target-catalog/adopt', async () => adoptProgress);
+
+  // content editor (product page): edit shared content once for all sizes & colors
+  app.get('/api/products/:id/content', async (req) => contentEditor((req.params as any).id));
+  app.put('/api/products/:id/content', async (req) => saveContent((req.params as any).id, ((req.body ?? {}) as any).values ?? {}));
 
   app.post('/api/products/item-types-from-target', async () => autoItemTypesFromTarget());
 
