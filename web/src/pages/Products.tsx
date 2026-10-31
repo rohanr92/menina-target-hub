@@ -18,6 +18,7 @@ export default function Products() {
   const list = useLoad(() => get(`/api/products?q=${encodeURIComponent(q)}&itemTypeId=${itemTypeId}&state=${state}&page=${page}`), [q, itemTypeId, state, page]);
   const types = useLoad(() => get('/api/taxonomy/item-types'));
   const { busy, run } = useAction();
+  const [catResult, setCatResult] = useState<any>(null);
   const nav = useNavigate();
   const toggle = (id: string) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const items = list.data?.items ?? [];
@@ -28,8 +29,17 @@ export default function Products() {
         <Btn onClick={() => setImportOpen(true)}>Import…</Btn>
         <Btn onClick={() => nav('/bulk')}>Bulk mapping</Btn>
         <Btn busy={busy === 'refresh'} onClick={() => run('refresh', () => post('/api/products/refresh-all'), (r: any) => `Checked ${r.catalogItems} Target items, updated ${r.updated}`).then(list.reload)}>Refresh Target statuses</Btn>
-        <Btn kind="primary" busy={busy === 'cat'} title="For products without an item type: use the category their items already have on Target, and add that category with its fields" onClick={() => run('cat', () => post('/api/products/item-types-from-target'), (r: any) => `${r.set} of ${r.products} product(s) got their Target category${r.addedCategories.length ? ` · added: ${r.addedCategories.join(', ')}` : ''}${r.problems.length ? ` · ${r.problems.length} not set: ${r.problems.slice(0, 3).map((x: any) => `${x.product} (${x.error})`).join('; ')}` : ''}`).then(list.reload)}>Set categories from Target</Btn>
+        <Btn kind="primary" busy={busy === 'cat'} title="For products without an item type: use the category their items already have on Target, and add that category with its fields" onClick={() => run('cat', () => post('/api/products/item-types-from-target').then((r: any) => { setCatResult(r); return r; }), (r: any) => `${r.set} of ${r.products} product(s) got their Target category${r.addedCategories.length ? ` · added: ${r.addedCategories.join(', ')}` : ''}${r.problems.length ? ` · ${r.problems.length} not set: ${r.problems.slice(0, 3).map((x: any) => `${x.product} (${x.error})`).join('; ')}` : ''}`).then(list.reload)}>Set categories from Target</Btn>
       </PageHead>
+      {catResult && (
+        <div className="card" style={{ marginBottom: 14 }}><div className="card-b small">
+          <b>Categories from Target:</b> {catResult.set} of {catResult.products} product(s) without a category got one.
+          {catResult.addedCategories.length > 0 && <> New categories added: <b>{catResult.addedCategories.join(', ')}</b> (their fields are loaded; value lists finish in the background).</>}
+          {catResult.problems.length > 0 && <ul style={{ margin: '6px 0 0 18px' }}>{catResult.problems.map((x: any, i: number) => <li key={i}><b>{x.product}</b>: {x.error}</li>)}</ul>}
+          {catResult.products === 0 && <> Every product already has a category.</>}
+          <button className="btn sm ghost" style={{ marginLeft: 8 }} onClick={() => setCatResult(null)}>Close</button>
+        </div></div>
+      )}
 
       <div className="row" style={{ marginBottom: 12 }}>
         <input style={{ width: 280 }} placeholder="Search title, SKU, barcode, TCIN" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} />
