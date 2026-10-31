@@ -4,6 +4,7 @@ import * as T from '../target/api.js';
 import { detectOptions } from './builder.js';
 import { reloadProductFromShopify } from './catalog.js';
 import { storeTargetProduct } from './targetCatalog.js';
+import { sendEnabled } from './items.js';
 
 /**
  * Image plan per color, chosen by hand in the hub (drag & drop of the Shopify images):
@@ -53,7 +54,7 @@ export async function imageEditor(productId: string) {
     const varImg = list.map((v) => v.imageUrl).find(Boolean);
     const suggested = [...new Set([varImg, ...pool.filter((u) => color !== ALL && word && u.toLowerCase().includes(word))].filter(Boolean) as string[])];
     colors.push({
-      color, skus: list.map((v) => v.sku), linkedCount: list.filter((v) => v.targetProductId).length,
+      color, skus: list.map((v) => v.sku), linkedCount: list.filter((v) => v.targetProductId).length, willGet: list.filter((v) => v.targetProductId && sendEnabled(v)).length, skippedSkus: list.filter((v) => v.targetProductId && !sendEnabled(v)).map((v) => `${v.sku}${v.listingStatus === 'UNLISTED' ? ' (unlisted)' : ' (Send OFF)'}`),
       onTarget: imagesOf(t?.fields as any), onTargetFetchedAt: t?.fetchedAt ?? null,
       plan: plan[color] ?? null, suggested: suggested.length ? suggested : pool.slice(0, 5),
     });
@@ -90,6 +91,8 @@ export async function pushImages(productId: string, opts: { colors?: string[] } 
   const pick = (c: string) => plan[c] ?? plan[ALL];
   for (const v of vs) {
     if (!v.targetProductId) continue;
+    // never touch sizes that are unlisted or switched to Send OFF: an update would list them again
+    if (!sendEnabled(v)) { results.push({ sku: v.sku, color: colorOf(v), action: 'skipped', reason: v.listingStatus === 'UNLISTED' ? 'unlisted (kept unlisted)' : 'Send is OFF for this SKU' }); continue; }
     const color = colorOf(v);
     if (opts.colors?.length && !opts.colors.includes(color)) continue;
     const urls = pick(color);

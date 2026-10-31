@@ -86,12 +86,12 @@ export default function ImagesEditor({ productId }: { productId: string }) {
       {colors.map((c: any) => {
         const list = plan[c.color] ?? [];
         return (
-          <Card key={c.color} title={<>{c.color === '_all' ? 'All items' : <>{colorOption}: {c.color}</>} <span className="small muted">· {c.skus.length} SKU(s), {c.linkedCount} on Target</span></>}
+          <Card key={c.color} title={<>{c.color === '_all' ? 'All items' : <>{colorOption}: {c.color}</>} <span className="small muted">· {c.skus.length} SKU(s) · <b style={{ color: '#15803d' }}>{c.willGet ?? c.linkedCount} get images</b>{c.skippedSkus?.length ? <> · <span style={{ color: '#b45309' }} title={c.skippedSkus.join('\n')}>{c.skippedSkus.length} skipped (unlisted / Send OFF)</span></> : ''}</span></>}
             actions={<>
               <Btn size="sm" disabled={!sel.length} onClick={() => { addSelected(c.color); setSel([]); }}>Add selected{sel.length ? ` (${sel.length})` : ''}</Btn>
               <Btn size="sm" kind="ghost" onClick={() => change((p) => ({ ...p, [c.color]: c.suggested }))}>Suggest</Btn>
               <Btn size="sm" kind="ghost" disabled={!list.length} onClick={() => change((p) => ({ ...p, [c.color]: [] }))}>Clear</Btn>
-              <Btn size="sm" disabled={!list.length || !c.linkedCount} busy={busy === 'send'} onClick={() => send(c.color)}>Send this color</Btn>
+              <Btn size="sm" disabled={!list.length || !(c.willGet ?? c.linkedCount)} busy={busy === 'send'} onClick={() => send(c.color)}>Send this color</Btn>
             </>}>
             <div className="small muted" style={{ marginBottom: 6 }}>New order (1st = main image). Drag to reorder, × to remove.</div>
             <div
