@@ -120,6 +120,10 @@ interface Ctx {
   titles: SyncTitles;
   sizeValues?: Record<string, string>;
   sizeKeys: string[]; // the item type's own size fields (e.g. "Shoe Size"), used for the title
+  /** Keep Target content + this item was copied from Target: send exactly Target's fields, add nothing automatic. */
+  strict?: boolean;
+  /** Parent fields as Target has them (to tell Target's parent data apart from your own product edits). */
+  parentOnTarget?: Map<string, string>;
   src?: string; original?: string; // set by resolve(): where the value came from
 }
 
@@ -246,6 +250,19 @@ function resolve(key: string, rule: MappingRule | undefined, c: Ctx): string | u
   // stage only accepts the test brand, even if you typed your real brand on the SKU (your brand still goes in the title)
   if (key === 'brands.name' && c.stage && c.forceBrand) { c.src = 'Stage rule (Target requires Valor Fitness)'; return c.forceBrand; }
   if (ov === NONE) { c.src = 'Left empty on purpose'; return undefined; }
+  if (c.strict) {
+    // existing Target item kept as it is on Target: only its own Target fields (plus your edits), never automatic extras
+    if (vov !== undefined && vov !== null && vov !== '') { c.src = (c.v?.overrides as any)?._from_target ? 'From Target (existing item)' : 'Override (this variant)'; return Array.isArray(vov) ? vov.join('|') : String(vov); }
+    const pov = (c.p.overrides as any)?.[key];
+    if (c.level === 'VAP' && pov !== undefined && pov !== null && pov !== '') { c.src = 'From Target (existing item)'; return Array.isArray(pov) ? pov.join('|') : String(pov); }
+    if (c.level !== 'VAP' && pov !== undefined && pov !== null && pov !== '') {
+      const sv = Array.isArray(pov) ? pov.join('|') : String(pov);
+      // the parent's own Target data (e.g. parent images) is not copied onto sizes; a product edit you made is
+      if (c.parentOnTarget?.get(key) !== sv) { c.src = 'Override (this product)'; return sv; }
+    }
+    c.src = 'Not on Target · not sent (Keep Target content)';
+    return undefined;
+  }
   if (ov !== undefined && ov !== null && ov !== '') { c.src = vov !== undefined ? ((c.v?.overrides as any)?._from_target ? 'From Target (existing item)' : 'Override (this variant)') : ((c.p.overrides as any)?._from_target ? 'From Target (existing item)' : 'Override (this product)'); return Array.isArray(ov) ? ov.join('|') : String(ov); }
   if (key === 'brands.name' && c.stage && c.forceBrand) { c.src = 'Stage rule (Target requires Valor Fitness)'; return c.forceBrand; }
   if (key === 'barcode.value' && c.stage && c.useMock && c.v?.mockBarcode) { c.src = `Stage test barcode (real: ${c.v.barcode || 'none'})`; return c.v.mockBarcode; }
@@ -349,7 +366,17 @@ export async function buildProduct(productId: string): Promise<BuildResult> {
     return fields;
   };
 
+  // "Keep Target content": items copied from Target are sent exactly as Target has them
+  const locked = [true, 'true'].includes((p.overrides as any)?._keep_target_content ?? (p.overrides as any)?.keep_target_content);
+  const parentOnTarget = new Map<string, string>();
+  if (locked && p.targetParentId) {
+    const t = await db.query.targetItems.findFirst({ where: eq(schema.targetItems.id, p.targetParentId) });
+    for (const f of ((t?.fields ?? []) as { name: string; value: any }[])) if (f?.name && f.value != null && f.value !== '') parentOnTarget.set(f.name, Array.isArray(f.value) ? f.value.join('|') : String(f.value));
+  }
+  const strictFor = (v: Variant | null, level: Ctx['level']) => locked && !!(level === 'VAP' ? (p.overrides as any)?._from_target : (v?.overrides as any)?._from_target);
+
   const ctxFor = (v: Variant | null, level: Ctx['level']): Ctx => ({
+    strict: strictFor(v, level), parentOnTarget,
     p, v, vs, level, theme, itemTypeName: itemType.name, stage, forceBrand: sync.stage.forceBrand, images, useMock: sync.stage.useMockBarcodes, titles: sync.titles, sizeValues: sync.sizeValues ?? {}, sizeKeys,
     size: v && sizeOption ? String((v.options as any)[sizeOption] ?? '') : '',
     color: v && colorOption ? String((v.options as any)[colorOption] ?? '') : '',
@@ -386,13 +413,16 @@ export async function buildProduct(productId: string): Promise<BuildResult> {
       const vals = children.map((ch) => ch.payload.fields.filter((f) => f.name === key).map((f) => f.value).join('|'));
       if (vals.every((x) => x && x === vals[0])) common.push(...children[0].payload.fields.filter((f) => f.name === key));
     }
-    const parentFields = [...parentBase.filter((f) => f.name !== 'variation.theme'), { name: 'variation.theme', value: theme }, ...common];
+    // a parent copied from Target keeps Target's own theme value (e.g. "Size & Color")
+    const tTheme = pc.strict ? (p.overrides as any)?.['variation.theme'] : undefined;
+    const themeVal = tTheme ? String(tTheme) : theme;
+    const parentFields = [...parentBase.filter((f) => f.name !== 'variation.theme'), { name: 'variation.theme', value: themeVal }, ...(pc.strict ? [] : common)];
     const commonKeys = new Set(common.map((f) => f.name));
     const firstTrace = result.trace[children[0]?.sku || children[0]?.variantId || ''] ?? [];
     result.trace.parent = [
       ...(result.trace.parent ?? []).filter((t) => t.key !== 'variation.theme'),
-      { key: 'variation.theme', value: theme, source: 'Detected from options' },
-      ...firstTrace.filter((t) => commonKeys.has(t.key)).map((t) => ({ ...t, source: `${t.source} (same on every child, so set on parent)` })),
+      { key: 'variation.theme', value: themeVal, source: tTheme ? 'From Target (existing item)' : 'Detected from options' },
+      ...(pc.strict ? [] : firstTrace).filter((t) => commonKeys.has(t.key)).map((t) => ({ ...t, source: `${t.source} (same on every child, so set on parent)` })),
     ];
     result.parent = { external_id: parentSku, relationship_type: 'VAP', fields: parentFields };
     result.items = children;
