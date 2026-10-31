@@ -210,3 +210,55 @@ export async function adoptAllTargetData(opts: { force?: boolean } = {}) {
   })().catch((e) => { adoptProgress.running = false; adoptProgress.lastError = String(e?.message ?? e); });
   return adoptProgress;
 }
+
+/**
+ * Existing products with no item type in the hub: take the category the items already have on Target,
+ * add that category to the hub (with its fields and allowed values) and set it on the product.
+ */
+export async function autoItemTypesFromTarget() {
+  const env = await getActiveEnv();
+  const { saveItemTypes, syncAttributes, syncValues } = await import('./taxonomy.js');
+  const prods = await db.select().from(schema.products).where(isNull(schema.products.itemTypeId));
+  const types = await db.select().from(schema.itemTypes);
+  const byName = new Map(types.map((t) => [t.name.toLowerCase(), t.id]));
+  const out: { product: string; itemType?: string; error?: string }[] = [];
+  const added: string[] = [];
+  for (const p of prods) {
+    const items = await db.select().from(schema.targetItems).where(and(eq(schema.targetItems.env, env), eq(schema.targetItems.matchedProductId, p.id)));
+    const votes = new Map<string, number>();
+    for (const t of items) if (t.itemTypeName) votes.set(t.itemTypeName, (votes.get(t.itemTypeName) ?? 0) + 1);
+    const name = [...votes.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+    if (!name) { out.push({ product: p.title, error: items.length ? 'Target has no category on these items' : 'not linked to Target items' }); continue; }
+    let id = byName.get(name.toLowerCase());
+    try {
+      if (!id) {
+        // the item itself carries its category id; fall back to searching the taxonomy by name
+        const one = items.find((t) => t.relationshipType !== 'VAP') ?? items[0];
+        const prod = await T.getProduct(one.id).catch(() => null);
+        id = prod?.item_type_id ? String(prod.item_type_id) : undefined;
+        if (!id) {
+          const hits = await T.searchItemTypes(name);
+          const exact = hits.find((h: any) => String(h.name ?? '').toLowerCase() === name.toLowerCase());
+          id = exact ? String(exact.id) : undefined;
+        }
+        if (!id) { out.push({ product: p.title, error: `category "${name}" not found in Target's list` }); continue; }
+        await saveItemTypes([{ id, name }]);
+        byName.set(name.toLowerCase(), id);
+        added.push(name);
+        try {
+          await syncAttributes(id);
+          // value lists take many calls: load them in the background
+          const itId = id;
+          syncValues(itId).catch(() => null);
+        } catch (e: any) {
+          out.push({ product: `${name} (category)`, error: `added, but its fields could not be loaded yet: ${e?.message ?? e}. Open Taxonomy & mapping › ${name} › Pull attributes.` });
+        }
+      }
+      await db.update(schema.products).set({ itemTypeId: id }).where(eq(schema.products.id, p.id));
+      out.push({ product: p.title, itemType: name });
+    } catch (e: any) {
+      out.push({ product: p.title, error: e?.message ?? String(e) });
+    }
+  }
+  return { products: prods.length, set: out.filter((x) => x.itemType).length, addedCategories: [...new Set(added)], problems: out.filter((x) => x.error) };
+}

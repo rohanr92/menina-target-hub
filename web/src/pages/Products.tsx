@@ -28,6 +28,7 @@ export default function Products() {
         <Btn onClick={() => setImportOpen(true)}>Import…</Btn>
         <Btn onClick={() => nav('/bulk')}>Bulk mapping</Btn>
         <Btn busy={busy === 'refresh'} onClick={() => run('refresh', () => post('/api/products/refresh-all'), (r: any) => `Checked ${r.catalogItems} Target items, updated ${r.updated}`).then(list.reload)}>Refresh Target statuses</Btn>
+        <Btn kind="primary" busy={busy === 'cat'} title="For products without an item type: use the category their items already have on Target, and add that category with its fields" onClick={() => run('cat', () => post('/api/products/item-types-from-target'), (r: any) => `${r.set} of ${r.products} product(s) got their Target category${r.addedCategories.length ? ` · added: ${r.addedCategories.join(', ')}` : ''}${r.problems.length ? ` · ${r.problems.length} not set: ${r.problems.slice(0, 3).map((x: any) => `${x.product} (${x.error})`).join('; ')}` : ''}`).then(list.reload)}>Set categories from Target</Btn>
       </PageHead>
 
       <div className="row" style={{ marginBottom: 12 }}>
