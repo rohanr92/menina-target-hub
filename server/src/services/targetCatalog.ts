@@ -179,21 +179,66 @@ export const adoptProgress = { running: false, total: 0, done: 0, copied: 0, fet
  * For every linked existing item: make sure we have Target's full field list (the catalog list often has no
  * fields, so each item is read on its own), then copy those values into the hub (once per item).
  */
-export async function adoptAllTargetData(opts: { force?: boolean } = {}) {
+/** Remove every content edit (field overrides, auto-map values) from a product or SKU; settings like Send, buffer, price rule stay. */
+const KEEP_KEYS = new Set(['fixed_qty', 'list_price', 'offer_price', 'map_price']);
+const KEEP_INTERNAL = (k: string) => k.startsWith('_') && k !== '_auto' && k !== '_from_target';
+function cleanOverrides(ov: Record<string, any>) {
+  return Object.fromEntries(Object.entries(ov ?? {}).filter(([k]) => KEEP_KEYS.has(k) || KEEP_INTERNAL(k)));
+}
+async function wipeContent(kind: 'product' | 'variant', id: string) {
+  if (kind === 'product') {
+    const p = await db.query.products.findFirst({ where: eq(schema.products.id, id) });
+    if (p) await db.update(schema.products).set({ overrides: cleanOverrides(p.overrides as any) }).where(eq(schema.products.id, id));
+  } else {
+    const v = await db.query.variants.findFirst({ where: eq(schema.variants.id, id) });
+    if (v) await db.update(schema.variants).set({ overrides: cleanOverrides(v.overrides as any) }).where(eq(schema.variants.id, id));
+  }
+}
+
+/** One product: read every linked item from Target now, drop all old edits (e.g. from testing) and use Target's content. */
+export async function resetProductToTarget(productId: string) {
+  const env = await getActiveEnv();
+  const p = await db.query.products.findFirst({ where: eq(schema.products.id, productId) });
+  if (!p) throw Object.assign(new Error('Product not found'), { statusCode: 404 });
+  const vs = await db.select().from(schema.variants).where(eq(schema.variants.productId, productId));
+  await wipeContent('product', productId);
+  let copied = 0; const errors: string[] = [];
+  const pairs: [string, string | null][] = [...vs.filter((v) => v.targetProductId).map((v) => [v.targetProductId!, v.id] as [string, string]), ...(p.targetParentId ? [[p.targetParentId, null] as [string, null]] : [])];
+  for (const [tid, vid] of pairs) {
+    try {
+      const fresh = await T.getProduct(tid);
+      await storeTargetProduct(fresh, env);
+      await db.update(schema.targetItems).set({ matchedProductId: productId, matchedVariantId: vid, matchBy: 'linked' }).where(eq(schema.targetItems.id, tid));
+      if (vid) await wipeContent('variant', vid);
+      const t = await db.query.targetItems.findFirst({ where: eq(schema.targetItems.id, tid) });
+      if (t && (await adoptTargetFields(t))) copied++;
+    } catch (e: any) { errors.push(`${tid}: ${e?.message ?? e}`); }
+  }
+  await db.execute(sql`UPDATE products SET overrides = overrides || '{"_keep_target_content": true}'::jsonb WHERE id = ${productId}`);
+  return { items: pairs.length, copied, errors };
+}
+
+export async function adoptAllTargetData(opts: { force?: boolean; reset?: boolean } = {}) {
   if (adoptProgress.running) return adoptProgress;
   const env = await getActiveEnv();
   const rows = await db.select().from(schema.targetItems).where(and(eq(schema.targetItems.env, env), sql`${schema.targetItems.matchedProductId} IS NOT NULL`));
   Object.assign(adoptProgress, { running: true, total: rows.length, done: 0, copied: 0, fetched: 0, failed: 0, startedAt: new Date(), finishedAt: null, lastError: null });
+  const wipedProducts = new Set<string>();
   (async () => {
     for (const t0 of rows) {
       try {
         let t = t0;
-        if (opts.force) {
+        if (opts.reset) {
+          // drop every old edit (testing, auto-map) so only Target's content is left
+          if (!wipedProducts.has(t.matchedProductId!)) { await wipeContent('product', t.matchedProductId!); wipedProducts.add(t.matchedProductId!); }
+          if (t.matchedVariantId) await wipeContent('variant', t.matchedVariantId);
+        }
+        if (opts.force || opts.reset) {
           // forget the earlier copy so Target's current data is copied again
           if (t.relationshipType === 'VAP') await db.execute(sql`UPDATE products SET overrides = overrides - '_from_target' WHERE id = ${t.matchedProductId}`);
           else if (t.matchedVariantId) await db.execute(sql`UPDATE variants SET overrides = overrides - '_from_target' WHERE id = ${t.matchedVariantId}`);
         }
-        if (!((t.fields ?? []) as any[]).length || opts.force) {
+        if (!((t.fields ?? []) as any[]).length || opts.force || opts.reset) {
           await new Promise((r) => setTimeout(r, 400)); // stay well under Target's rate limit
           const fresh = await T.getProduct(t.id);
           await storeTargetProduct(fresh, env);
