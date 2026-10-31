@@ -416,6 +416,14 @@ export async function buildProduct(productId: string): Promise<BuildResult> {
     // a parent copied from Target keeps Target's own theme value (e.g. "Size & Color")
     const tTheme = pc.strict ? (p.overrides as any)?.['variation.theme'] : undefined;
     const themeVal = tTheme ? String(tTheme) : theme;
+    // a kept size without its own theme still needs one when sent: use the parent's (Target requires it on sizes)
+    for (const ch of children) {
+      const v = vs.find((x) => x.id === ch.variantId) ?? null;
+      if (strictFor(v, 'VC') && !ch.payload.fields.some((f) => f.name === 'variation.theme')) {
+        ch.payload.fields.push({ name: 'variation.theme', value: themeVal });
+        (result.trace[ch.sku || ch.variantId] ??= []).push({ key: 'variation.theme', value: themeVal, source: 'Parent theme (sizes need it)' });
+      }
+    }
     const parentFields = [...parentBase.filter((f) => f.name !== 'variation.theme'), { name: 'variation.theme', value: themeVal }, ...(pc.strict ? [] : common)];
     const commonKeys = new Set(common.map((f) => f.name));
     const firstTrace = result.trace[children[0]?.sku || children[0]?.variantId || ''] ?? [];
@@ -432,16 +440,26 @@ export async function buildProduct(productId: string): Promise<BuildResult> {
     if (dupCombo.length) issues.push({ level: 'error', scope: 'product', message: `Two children share the same variation value: ${[...new Set(dupCombo)].join(', ')}` });
   }
 
-  validateContent(result, contentAttrs);
+  // items kept as they are on Target: check them together with their parent (Target keeps shared fields like
+  // PFAS, theme and images on the parent), and never block them for something Target already approved
+  const kept = new Set<string>();
+  if (theme === 'SA') { for (const v of vs) if (strictFor(v, 'SA')) kept.add(v.sku ?? v.id); }
+  else { for (const v of vs) if (strictFor(v, 'VC')) kept.add(v.sku ?? v.id); if (strictFor(null, 'VAP')) kept.add('parent'); }
+  validateContent(result, contentAttrs, kept);
   return result;
 }
 
 function get(fields: Field[], name: string) { return fields.filter((f) => f.name === name).map((f) => f.value); }
 
-function validateContent(r: BuildResult, contentAttrs: Attribute[]) {
+function validateContent(r: BuildResult, contentAttrs: Attribute[], kept: Set<string> = new Set()) {
   const all = [...(r.parent ? [{ scope: 'parent', p: r.parent }] : []), ...r.items.map((i) => ({ scope: i.sku || 'item', p: i.payload }))];
   for (const { scope, p } of all) {
-    const f = p.fields;
+    const isKept = kept.has(scope);
+    const before = r.issues.length;
+    // a kept child is checked together with its parent's fields (Target shares parent fields with the sizes)
+    const f = isKept && p.relationship_type === 'VC' && r.parent
+      ? [...p.fields, ...r.parent.fields.filter((x) => !p.fields.some((y) => y.name === x.name))]
+      : p.fields;
     const lvl = p.relationship_type;
     const title = lvl === 'VAP' ? get(f, 'descriptions.parent_title')[0] : get(f, 'descriptions.title')[0];
     if (!title) r.issues.push({ level: 'error', scope, field: lvl === 'VAP' ? 'descriptions.parent_title' : 'descriptions.title', message: 'Title is required' });
@@ -487,6 +505,10 @@ function validateContent(r: BuildResult, contentAttrs: Attribute[]) {
     if (lvl === 'VC') {
       if (r.theme.includes('size') && !get(f, 'child_variations.size')[0]) r.issues.push({ level: 'error', scope, field: 'child_variations.size', message: 'No size value for this child. Set the size option on the product (Target setup › Size option) or an override.' });
       if (r.theme.includes('color') && !get(f, 'child_variations.color')[0]) r.issues.push({ level: 'error', scope, field: 'child_variations.color', message: 'No color value for this child. Set the color option on the product (Target setup › Color option) or an override.' });
+    }
+    if (isKept) {
+      // Target already has (and approved) this item like this: show what is missing, but don't block sending
+      for (const i of r.issues.slice(before)) if (i.level === 'error') { i.level = 'warning'; i.message += ' (same as on Target now)'; }
     }
   }
   // de-duplicate identical messages
