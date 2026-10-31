@@ -6,6 +6,7 @@ import { getShopify, getSync } from '../lib/settings.js';
 import { shopifyGraphql } from '../shopify/client.js';
 import { unlistVariant } from '../services/items.js';
 import { enqueue } from '../services/sync.js';
+import { fillFromListedSize } from '../services/grid.js';
 import { adoptAllTargetData, adoptProgress, autoItemTypesFromTarget, resetProductToTarget } from '../services/targetCatalog.js';
 
 const bad = (msg: string, code = 400) => Object.assign(new Error(msg), { statusCode: code });
@@ -135,6 +136,12 @@ export default async function (app: FastifyInstance) {
     const val = b.send === true || b.send === false ? b.send : null;
     await setOverride(ids, (ov) => { if (val === null) delete ov._send; else ov._send = val; return ov; });
     return { updated: ids.length, send: val };
+  });
+
+  /** Unlisted / rejected sizes: copy the values of a listed size (same color first). */
+  app.post('/api/bulk/fill-from-listed', async (req) => {
+    const b = req.body as any;
+    return fillFromListedSize(await idsFrom(b), { overwrite: !!b.overwrite });
   });
 
   /** Unlist on Target (approved items only). */

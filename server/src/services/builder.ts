@@ -304,7 +304,7 @@ function pushField(fields: Field[], key: string, raw: string, attr: Attribute | 
   }
 }
 
-export async function buildProduct(productId: string): Promise<BuildResult> {
+export async function buildProduct(productId: string, opts: { checkOff?: boolean } = {}): Promise<BuildResult> {
   const p = await db.query.products.findFirst({ where: eq(schema.products.id, productId) });
   if (!p) throw new Error('Product not found');
   const vs = (await db.select().from(schema.variants).where(eq(schema.variants.productId, productId)))
@@ -449,7 +449,7 @@ export async function buildProduct(productId: string): Promise<BuildResult> {
   // sizes that are unlisted on Target or switched to Send OFF are never sent, so their problems don't matter
   const sendOn = (v: Variant) => { const x = (v.overrides as any)?._send; return x === true || x === false ? x : v.listingStatus !== 'UNLISTED'; };
   const off = new Set(vs.filter((v) => !sendOn(v)).map((v) => v.sku ?? v.id));
-  if (off.size) {
+  if (off.size && !opts.checkOff) {
     result.issues = result.issues.filter((i) => !off.has(i.scope));
     result.issues.push({ level: 'warning', scope: 'product', message: `${off.size} size(s) are unlisted or Send OFF: not checked and never sent (${[...off].slice(0, 6).join(', ')}${off.size > 6 ? '…' : ''})` });
   }

@@ -491,6 +491,12 @@ export default function BulkEdit() {
         <input style={{ width: 260 }} placeholder="Search title, SKU, barcode, TCIN" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} />
         <select style={{ width: 170 }} value={state} onChange={(e) => { setState(e.target.value); setPage(1); }}>
           <option value="">Any status</option><option value="not_on_target">Not on Target</option><option value="on_target">On Target</option>
+          <optgroup label="Sizes to fix later">
+            <option value="not_selling">Not selling (unlisted, rejected, Send OFF)</option>
+            <option value="unlisted">Unlisted sizes</option>
+            <option value="rejected">Rejected sizes</option>
+            <option value="send_off">Send OFF sizes</option>
+          </optgroup>
         </select>
         <div className="seg">
           <button className={mode === 'required' ? 'on' : ''} onClick={() => setMode('required')}>Required fields</button>
@@ -508,6 +514,11 @@ export default function BulkEdit() {
           <span style={{ flex: 1 }} />
           <button className="btn sm" onClick={() => setAutoOpen(true)}>Auto-map selected</button>
           <button className="btn sm" onClick={() => setImages({ rows: selRows, cols: imageCols, bulk: true })} disabled={!selRows.length}>Set images</button>
+          <button className="btn sm" title="Copy the values of a listed size of the same product (same color first) into the selected sizes" onClick={() => run('fill', async () => {
+            if (!confirm(`Copy values from a listed size into ${sel.size} selected SKU(s)?\n\nFor each size the hub picks a listed size of the same product (same color first) and copies its fields: description, bullets, attributes, images (same color only), title with the size swapped.\nNever copied: barcode, size, prices.`)) return null;
+            const overwrite = confirm('Also REPLACE values that are different from the listed size?\n\nOK = replace them (match the listed size exactly)\nCancel = only fill empty fields');
+            return post('/api/bulk/fill-from-listed', { variantIds: [...sel], overwrite });
+          }, (r: any) => (r ? `${r.updated} SKU(s) updated${r.failed ? ` · ${r.failed} skipped: ${r.results.filter((x: any) => !x.ok).slice(0, 3).map((x: any) => `${x.sku} (${x.reason})`).join(', ')}` : ''}` : 'Cancelled')).then(reload)}>{busy === 'fill' ? 'Copying…' : 'Copy from listed size'}</button>
           <span className="small" style={{ opacity: .85 }}>Send to Target:</span>
           <button className="btn sm" style={{ background: '#16a34a', color: '#fff', borderColor: '#16a34a' }} onClick={() => setSend(selRows.map((r) => r.variantId), true)}>ON</button>
           <button className="btn sm" style={{ background: '#6b7280', color: '#fff', borderColor: '#6b7280' }} onClick={() => setSend(selRows.map((r) => r.variantId), false)}>OFF</button>

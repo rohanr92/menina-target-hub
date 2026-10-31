@@ -132,7 +132,7 @@ export async function buildRows(prods: Product[], vs: Variant[]): Promise<GridRo
     const allVariants = await db.select().from(schema.variants).where(eq(schema.variants.productId, p.id));
     const theme = detectTheme(p, allVariants);
     let built: Awaited<ReturnType<typeof buildProduct>> | null = null;
-    if (p.itemTypeId) { try { built = await buildProduct(p.id); } catch { built = null; } }
+    if (p.itemTypeId) { try { built = await buildProduct(p.id, { checkOff: true }); } catch { built = null; } }
     const pAuto = autoKeys(p);
     for (const v of mine) {
       const vAuto = variantAutoKeys(v);
@@ -177,6 +177,24 @@ export async function buildRows(prods: Product[], vs: Variant[]): Promise<GridRo
   return rows;
 }
 
+/** Size-level status filters (only the matching sizes are shown). */
+function sizeStateSql(state?: string) {
+  if (state === 'unlisted') return sql`v.listing_status = 'UNLISTED'`;
+  if (state === 'rejected') return sql`v.listing_status IN ('REJECTED','SUSPENDED')`;
+  if (state === 'send_off') return sql`(v.overrides->>'_send' = 'false' OR (v.overrides->>'_send' IS NULL AND v.listing_status = 'UNLISTED'))`;
+  if (state === 'not_selling') return sql`(v.listing_status IN ('UNLISTED','REJECTED','SUSPENDED') OR v.overrides->>'_send' = 'false')`;
+  return null;
+}
+function sizeStateMatch(state: string | undefined, v: Variant) {
+  const ls = v.listingStatus ?? '';
+  const send = (v.overrides as any)?._send;
+  if (state === 'unlisted') return ls === 'UNLISTED';
+  if (state === 'rejected') return ls === 'REJECTED' || ls === 'SUSPENDED';
+  if (state === 'send_off') return send === false || (send === undefined && ls === 'UNLISTED');
+  if (state === 'not_selling') return ['UNLISTED', 'REJECTED', 'SUSPENDED'].includes(ls) || send === false;
+  return true;
+}
+
 export interface GridQuery { itemTypeId?: string; q?: string; productIds?: string[]; variantIds?: string[]; state?: string; page?: number; pageSize?: number }
 
 async function findProducts(f: GridQuery) {
@@ -188,6 +206,8 @@ async function findProducts(f: GridQuery) {
   if (f.q) conds.push(or(ilike(schema.products.title, `%${f.q}%`), sql`EXISTS (SELECT 1 FROM variants v WHERE v.product_id = ${schema.products.id} AND (v.sku ILIKE ${'%' + f.q + '%'} OR v.barcode ILIKE ${'%' + f.q + '%'} OR v.tcin = ${f.q}))`));
   if (f.state === 'on_target') conds.push(sql`EXISTS (SELECT 1 FROM variants v WHERE v.product_id = ${schema.products.id} AND v.target_product_id IS NOT NULL)`);
   if (f.state === 'not_on_target') conds.push(sql`NOT EXISTS (SELECT 1 FROM variants v WHERE v.product_id = ${schema.products.id} AND v.target_product_id IS NOT NULL)`);
+  const vc = sizeStateSql(f.state);
+  if (vc) conds.push(sql`EXISTS (SELECT 1 FROM variants v WHERE v.product_id = ${schema.products.id} AND ${vc})`);
   return conds.length ? and(...conds) : undefined;
 }
 
@@ -199,6 +219,7 @@ export async function gridPage(f: GridQuery) {
   const ids = prods.map((p) => p.id);
   let vs = ids.length ? await db.select().from(schema.variants).where(inArray(schema.variants.productId, ids)) : [];
   if (f.variantIds?.length) vs = vs.filter((v) => f.variantIds!.includes(v.id));
+  vs = vs.filter((v) => sizeStateMatch(f.state, v));
   return { total: n, page, pageSize, rows: await buildRows(prods, vs) };
 }
 
@@ -209,6 +230,7 @@ export async function allRows(f: GridQuery, max = 3000) {
   const ids = prods.map((p) => p.id);
   let vs = ids.length ? await db.select().from(schema.variants).where(inArray(schema.variants.productId, ids)) : [];
   if (f.variantIds?.length) vs = vs.filter((v) => f.variantIds!.includes(v.id));
+  vs = vs.filter((v) => sizeStateMatch(f.state, v));
   return buildRows(prods, vs);
 }
 
@@ -762,4 +784,61 @@ export function startCategorySetup(opts: { onlyIds?: string[]; withValues?: bool
     }
   })();
   return setupState;
+}
+
+
+const SIZE_KEYS = new Set(['barcode.value', 'child_variations.size', 'descriptions.title', 'external_id', 'fixed_qty', 'list_price', 'offer_price', 'map_price']);
+const isImageKey = (k: string) => k.startsWith('digital_assets.images.');
+const escRe = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Unlisted / rejected sizes: copy the values of a listed size of the same product (same color first),
+ * so they match the sizes that are selling. Size-specific values (barcode, size, prices) are never copied;
+ * the title is copied with the size swapped. overwrite=false only fills empty fields.
+ */
+export async function fillFromListedSize(variantIds: string[], opts: { overwrite?: boolean } = {}) {
+  const targets = await db.select().from(schema.variants).where(inArray(schema.variants.id, variantIds));
+  const results: any[] = [];
+  const byProduct = new Map<string, Variant[]>();
+  for (const v of targets) byProduct.set(v.productId, [...(byProduct.get(v.productId) ?? []), v]);
+  for (const [pid, list] of byProduct) {
+    const p = await db.query.products.findFirst({ where: eq(schema.products.id, pid) });
+    if (!p) continue;
+    const all = await db.select().from(schema.variants).where(eq(schema.variants.productId, pid));
+    const { sizeOption, colorOption } = detectOptions(p);
+    const opt = (v: Variant, o: string | null) => (o ? String((v.options as any)?.[o] ?? '') : '');
+    const good = all.filter((v) => !variantIds.includes(v.id) && sendEnabled(v) && v.targetProductId && !['REJECTED', 'SUSPENDED', 'UNLISTED'].includes(v.listingStatus ?? ''));
+    for (const v of list) {
+      const src = good.find((s) => opt(s, colorOption) === opt(v, colorOption)) ?? good[0];
+      if (!src) { results.push({ sku: v.sku, ok: false, reason: 'no listed size of this product to copy from' }); continue; }
+      const sameColor = opt(src, colorOption) === opt(v, colorOption);
+      const so = (src.overrides as any) ?? {};
+      const ov: Record<string, any> = { ...((v.overrides as any) ?? {}) };
+      let copied = 0;
+      for (const [k, val] of Object.entries(so)) {
+        if (k.startsWith('_') || SIZE_KEYS.has(k)) continue;
+        if (!sameColor && (k === 'child_variations.color' || isImageKey(k))) continue;
+        if (!opts.overwrite && ov[k] !== undefined && ov[k] !== null && ov[k] !== '') continue;
+        if (ov[k] === val) continue;
+        ov[k] = val; copied++;
+      }
+      // title: the listed size's title with its size (and color) swapped for this one's
+      const st = so['descriptions.title'];
+      const sSize = so['child_variations.size'] || opt(src, sizeOption), mySize = ov['child_variations.size'] || opt(v, sizeOption);
+      if (st && sSize && mySize && (opts.overwrite || !ov['descriptions.title'])) {
+        let t = String(st);
+        const re = new RegExp(`(^|[^\\d.])${escRe(String(sSize))}(?![\\d.])`);
+        if (re.test(t)) {
+          t = t.replace(re, `$1${mySize}`);
+          const sc = opt(src, colorOption), mc = opt(v, colorOption);
+          if (!sameColor && sc && mc) t = t.replace(new RegExp(escRe(sc), 'i'), mc);
+          if (t !== ov['descriptions.title']) { ov['descriptions.title'] = t; copied++; }
+        }
+      }
+      if (ov._auto) ov._auto = (ov._auto as string[]).filter((k) => !(k in so));
+      await db.update(schema.variants).set({ overrides: ov }).where(eq(schema.variants.id, v.id));
+      results.push({ sku: v.sku, ok: true, from: src.sku, sameColor, copied });
+    }
+  }
+  return { updated: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length, results };
 }
