@@ -446,6 +446,13 @@ export async function buildProduct(productId: string): Promise<BuildResult> {
   if (theme === 'SA') { for (const v of vs) if (strictFor(v, 'SA')) kept.add(v.sku ?? v.id); }
   else { for (const v of vs) if (strictFor(v, 'VC')) kept.add(v.sku ?? v.id); if (strictFor(null, 'VAP')) kept.add('parent'); }
   validateContent(result, contentAttrs, kept);
+  // sizes that are unlisted on Target or switched to Send OFF are never sent, so their problems don't matter
+  const sendOn = (v: Variant) => { const x = (v.overrides as any)?._send; return x === true || x === false ? x : v.listingStatus !== 'UNLISTED'; };
+  const off = new Set(vs.filter((v) => !sendOn(v)).map((v) => v.sku ?? v.id));
+  if (off.size) {
+    result.issues = result.issues.filter((i) => !off.has(i.scope));
+    result.issues.push({ level: 'warning', scope: 'product', message: `${off.size} size(s) are unlisted or Send OFF: not checked and never sent (${[...off].slice(0, 6).join(', ')}${off.size > 6 ? '…' : ''})` });
+  }
   return result;
 }
 
