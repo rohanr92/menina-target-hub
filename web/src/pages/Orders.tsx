@@ -74,6 +74,7 @@ export default function Orders() {
     <div className="page">
       <PageHead title="Orders" sub="Target Plus orders. New orders are acknowledged and created in Shopify automatically; fulfill in Shopify and the tracking goes to Target.">
         <Btn busy={busy === 'import'} onClick={() => run('import', () => post('/api/orders/import'), (r: any) => `${r.imported} orders loaded${r.perStatus ? ' · ' + Object.entries(r.perStatus).map(([k, v]) => `${k.toLowerCase()}: ${v}`).join(', ') : ''}`).then(reload)}>Load all orders</Btn>
+        <Btn busy={busy === 'fixship'} title="Orders created in Shopify before the fix show “Shipping not required” and $0 paid. This replaces the unfulfilled ones with correct orders." onClick={() => confirm('Fix Shopify orders created by the hub that show “Shipping not required”?\n\nEach unfulfilled one is canceled in Shopify (stock goes back) and created again correctly: shipping required, marked paid, Target discount. Fulfilled ones are not touched.') && run('fixship', () => post('/api/orders/fix-shopify-shipping'), (r: any) => `${r.replaced} order(s) replaced${r.failed ? ` · ${r.failed} not changed: ${r.results.filter((x: any) => !x.ok).slice(0, 3).map((x: any) => `${x.order} (${x.error})`).join(', ')}` : ''}`).then(reload)}>Fix Shopify shipping</Btn>
         <Btn kind="primary" busy={busy === 'poll'} onClick={() => run('poll', () => post('/api/orders/poll'), (r: any) => `${r.released} released · ${r.created} new · ${r.acknowledged} acknowledged`).then(reload)}>Pull new orders</Btn>
       </PageHead>
 

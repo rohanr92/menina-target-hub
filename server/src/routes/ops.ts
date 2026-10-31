@@ -310,6 +310,8 @@ export default async function (app: FastifyInstance) {
     return res;
   });
   app.post('/api/orders/:id/push-shopify', async (req) => O.pushOrderToShopify((req.params as any).id));
+  app.post('/api/orders/:id/recreate-shopify', async (req) => O.recreateShopifyOrder((req.params as any).id));
+  app.post('/api/orders/fix-shopify-shipping', async () => O.fixShopifyShipping());
   app.post('/api/orders/tracking-sync', async () => runJob('tracking', O.syncTrackingFromShopify));
 
   // ---------------- reports ----------------

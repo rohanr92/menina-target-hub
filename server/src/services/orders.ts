@@ -345,18 +345,29 @@ export async function pushOrderToShopify(orderId: string) {
     const addr: any = order.address ?? (await fetchAddress(orderId));
     const sa = addr?.shipping_address ?? {};
     const lineItems: any[] = [];
+    const cur = raw.currency || 'USD';
+    const money = (n: number) => ({ shopMoney: { amount: (Math.round(n * 100) / 100).toFixed(2), currencyCode: cur } });
+    let items = 0, discount = 0, shipping = 0;
     for (const l of raw.order_lines ?? []) {
       const q = soldQty(l);
       if (!q) continue;
       const r = await resolveLineVariant(l);
       if (!r.gid) throw new Error(`Line ${l.order_line_number}: no Shopify variant found for UPC ${r.barcode || '-'} / SKU ${l.external_id ?? '-'} / TCIN ${l.tcin ?? '-'}. Not created, so stock is not mixed up.`);
+      const share = Number(l.quantity) > 0 ? q / Number(l.quantity) : 1; // part of the line still sold (rest canceled)
+      items += Number(l.unit_price ?? 0) * q;
+      discount += Number(l.total_item_discount || 0) * share;
+      shipping += (Number(l.total_shipping_price || 0) - Number(l.total_shipping_discount || 0)) * share;
+      const lb = (r.local as any)?.weightLb;
       lineItems.push({
         variantId: r.gid,
         quantity: q,
-        priceSet: { shopMoney: { amount: String(l.unit_price ?? 0), currencyCode: raw.currency || 'USD' } },
+        requiresShipping: true, // Shopify's default for created orders is "Shipping not required"
+        ...(lb ? { weight: { value: Number(lb), unit: 'POUNDS' } } : {}),
+        priceSet: money(Number(l.unit_price ?? 0)),
       });
     }
     if (!lineItems.length) throw new Error('No open lines to push');
+    const total = Math.max(0, items - discount + shipping);
     const input = {
       order: {
         lineItems,
@@ -365,14 +376,16 @@ export async function pushOrderToShopify(orderId: string) {
         sourceIdentifier: String(order.id),
         tags: ['Target Plus', 'Target', tag],
         note: `Target Plus order ${raw.order_number} (id ${order.id}). Ship by ${raw.requested_shipment_date ?? '-'}, deliver by ${raw.requested_delivery_date ?? '-'}.`,
-        financialStatus: 'PAID',
-        currency: raw.currency || 'USD',
+        currency: cur,
+        // the guest paid Target: record it as paid (no "Enter credit card" / $0.00 paid)
+        transactions: [{ kind: 'SALE', status: 'SUCCESS', gateway: 'Target Plus', amountSet: money(total) }],
+        ...(discount > 0.004 ? { discountCode: { itemFixedDiscountCode: { code: 'TARGET DISCOUNT', amountSet: money(discount) } } } : {}),
         shippingAddress: {
           firstName: sa.first_name, lastName: sa.last_name, address1: sa.address1, address2: sa.address2 || undefined,
           city: sa.city, provinceCode: sa.state, zip: sa.postal_code, countryCode: (sa.country_code || 'US').slice(0, 2).toUpperCase(),
           phone: sa.phone_numbers?.[0]?.number || undefined,
         },
-        shippingLines: [{ title: raw.level_of_service ? `Target ${raw.level_of_service}` : 'Target Plus shipping', priceSet: { shopMoney: { amount: '0.00', currencyCode: raw.currency || 'USD' } } }],
+        shippingLines: [{ title: raw.level_of_service ? `Target ${raw.level_of_service}` : 'Target Plus shipping', priceSet: money(Math.max(0, shipping)) }],
       },
       options: { inventoryBehaviour: 'DECREMENT_OBEYING_POLICY', sendReceipt: false, sendFulfillmentReceipt: false },
     };
@@ -498,4 +511,53 @@ export async function syncReturnsToShopify() {
   }
   await setSetting('returns.processed', [...done].slice(-5000));
   return { returns: returns.length, refunded, failed };
+}
+
+
+const ORDER_CHECK = `query OrderCheck($id: ID!) { order(id: $id) { id name tags cancelledAt displayFulfillmentStatus lineItems(first: 50) { nodes { requiresShipping } } } }`;
+const TAGS_REMOVE = `mutation TagsRemove($id: ID!, $tags: [String!]!) { tagsRemove(id: $id, tags: $tags) { userErrors { field message } } }`;
+const ORDER_CANCEL = `mutation OrderCancel($orderId: ID!, $notifyCustomer: Boolean, $reason: OrderCancelReason!, $refund: Boolean!, $restock: Boolean!, $staffNote: String) {
+  orderCancel(orderId: $orderId, notifyCustomer: $notifyCustomer, reason: $reason, refund: $refund, restock: $restock, staffNote: $staffNote) { job { id } orderCancelUserErrors { field message } }
+}`;
+
+/**
+ * Orders created before the fix had "Shipping not required" and $0 paid. Replace one: the old Shopify order is
+ * canceled with restock (stock goes back) and a new, correct one is created (stock goes out again).
+ * Only for orders not fulfilled in Shopify yet.
+ */
+export async function recreateShopifyOrder(orderId: string, opts: { onlyIfBroken?: boolean } = {}) {
+  const order = await db.query.orders.findFirst({ where: eq(schema.orders.id, orderId) });
+  if (!order?.shopifyOrderId) throw new Error('This order is not in Shopify yet');
+  const d: any = await shopifyGraphql(ORDER_CHECK, { id: order.shopifyOrderId }, 'shopify-order');
+  const o = d.order;
+  if (o && !o.cancelledAt) {
+    const broken = (o.lineItems?.nodes ?? []).some((x: any) => !x.requiresShipping);
+    if (opts.onlyIfBroken && !broken) return { skipped: true, reason: 'already correct', name: o.name };
+    if (o.displayFulfillmentStatus !== 'UNFULFILLED') throw new Error(`Shopify order ${o.name} is already ${String(o.displayFulfillmentStatus).toLowerCase().replace(/_/g, ' ')}; fix it by hand in Shopify`);
+    const tag = `target-order-${(order.raw as any)?.order_number ?? order.id}`;
+    await shopifyGraphql(TAGS_REMOVE, { id: o.id, tags: [tag] }, 'shopify-order');
+    await shopifyGraphql(TAGS_ADD, { id: o.id, tags: ['target-replaced'] }, 'shopify-order');
+    const c: any = await shopifyGraphql(ORDER_CANCEL, { orderId: o.id, notifyCustomer: false, reason: 'OTHER', refund: false, restock: true, staffNote: 'Replaced by the Target Hub (shipping fix)' }, 'shopify-order');
+    const errs = c.orderCancel?.orderCancelUserErrors ?? [];
+    if (errs.length) throw new Error(`Could not cancel ${o.name}: ${errs.map((e: any) => e.message).join('; ')}`);
+  }
+  await db.update(schema.orders).set({ shopifyOrderId: null, shopifyOrderName: null }).where(eq(schema.orders.id, orderId));
+  const made: any = await pushOrderToShopify(orderId);
+  return { old: o?.name ?? null, new: made?.name ?? null };
+}
+
+/** Replace every hub-created Shopify order that is still unfulfilled and has "Shipping not required". */
+export async function fixShopifyShipping() {
+  const rows = await db.select().from(schema.orders).where(isNotNull(schema.orders.shopifyOrderId));
+  const results: any[] = [];
+  for (const r of rows) {
+    if (r.status === 'CANCELED') continue;
+    try {
+      const x: any = await recreateShopifyOrder(r.id, { onlyIfBroken: true });
+      if (!x.skipped) results.push({ order: (r.raw as any)?.order_number ?? r.id, ok: true, ...x });
+    } catch (e: any) {
+      results.push({ order: (r.raw as any)?.order_number ?? r.id, ok: false, error: e?.message ?? String(e) });
+    }
+  }
+  return { replaced: results.filter((x) => x.ok).length, failed: results.filter((x) => !x.ok).length, results };
 }

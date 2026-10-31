@@ -236,6 +236,11 @@ export default function OrderDetail() {
               <span>Order</span><span>{o.shopifyOrderName ?? <span className="muted">not created</span>}</span>
               {o.shopifyPushError && <><span>Error</span><span className="bad small">{o.shopifyPushError}</span></>}
             </div>
+            {o.shopifyOrderId && anyOpen && (
+              <div style={{ padding: '0 16px 14px' }}>
+                <Btn size="sm" busy={busy === 'recreate'} title="For orders created before the fix (Shipping not required / $0 paid): cancels the Shopify order with restock and creates a correct one" onClick={() => confirm(`Replace Shopify order ${o.shopifyOrderName ?? ''}?\n\nThe old one is canceled (stock goes back) and a new one is created with shipping required and marked paid (stock goes out again). Only works if it is not fulfilled in Shopify yet.`) && run('recreate', () => post(`/api/orders/${enc}/recreate-shopify`), (r: any) => `Replaced ${r.old ?? ''} with ${r.new ?? ''}`).then(reload)}>Recreate in Shopify</Btn>
+              </div>
+            )}
           </section>
         </aside>
       </div>
