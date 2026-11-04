@@ -126,6 +126,10 @@ export async function assertMayUpdate(productId: string) {
   }
   return cur;
 }
+/** Relist on purpose: send the item's own current Target fields back (new version → Target review → on sale). No guard. */
+export async function relistProduct(productId: string, p: ProductUpdate) {
+  return (await targetRequest('sellers', 'PUT', `/sellers/${await sellerId()}/products/${encodeURIComponent(productId)}`, { body: p, source: 'items' })).data;
+}
 export async function updateProduct(productId: string, p: ProductUpdate) {
   await assertMayUpdate(productId);
   return (await targetRequest('sellers', 'PUT', `/sellers/${await sellerId()}/products/${encodeURIComponent(productId)}`, { body: p, source: 'items' })).data;

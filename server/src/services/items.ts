@@ -19,6 +19,11 @@ const tcinOf = (prod: any): string | undefined => {
 
 async function saveVariantFromTarget(variantId: string, prod: any) {
   const s = latestStatus(prod);
+  // a relist is finished once Target shows it approved
+  if (effectiveListing(prod) === 'APPROVED') {
+    const v0 = await db.query.variants.findFirst({ where: eq(schema.variants.id, variantId) });
+    if ((v0?.overrides as any)?._relisting) { const o = { ...(v0!.overrides as any) }; delete o._relisting; await db.update(schema.variants).set({ overrides: o }).where(eq(schema.variants.id, variantId)); }
+  }
   await db.update(schema.variants).set({
     targetProductId: prod.id ?? undefined,
     tcin: tcinOf(prod),
@@ -251,7 +256,7 @@ export async function refreshPending() {
 export async function unlistTargetProduct(targetProductId: string, variantId?: string | null): Promise<{ status: 'unlisted' | 'already unlisted' | 'not live'; detail?: string }> {
   if (variantId) {
     const v0 = await db.query.variants.findFirst({ where: eq(schema.variants.id, variantId) });
-    if (v0) await db.update(schema.variants).set({ overrides: { ...((v0.overrides as any) ?? {}), _send: false, _unlisted_by_hub: new Date().toISOString() } }).where(eq(schema.variants.id, variantId));
+    if (v0) { const o: any = { ...((v0.overrides as any) ?? {}), _send: false, _unlisted_by_hub: new Date().toISOString() }; delete o._relisting; await db.update(schema.variants).set({ overrides: o }).where(eq(schema.variants.id, variantId)); }
   }
   const save = async (prod: any) => {
     if (variantId) await saveVariantFromTarget(variantId, { ...prod, id: targetProductId });
@@ -271,6 +276,34 @@ export async function unlistTargetProduct(targetProductId: string, variantId?: s
   await save(after);
   if (effectiveListing(after) !== 'UNLISTED') throw new Error(`Target did not confirm the unlist (now ${effectiveListing(after) ?? 'unknown'}). Send is OFF; try again or unlist it in the Target portal.`);
   return { status: 'unlisted' };
+}
+
+/**
+ * List again (relist) on purpose: Send goes back to automatic, then the item's own current Target content is sent
+ * back unchanged. That makes a new version, which Target reviews and puts on sale again. Price and stock follow.
+ */
+export async function relistTargetProduct(targetProductId: string, variantId?: string | null): Promise<{ status: 'relist sent' | 'already listed'; detail?: string }> {
+  if (variantId) {
+    const v0 = await db.query.variants.findFirst({ where: eq(schema.variants.id, variantId) });
+    // _relisting: price and stock are sent while Target reviews the new version (its old version still shows unlisted)
+    if (v0) { const o = { ...((v0.overrides as any) ?? {}) }; delete o._send; delete o._unlisted_by_hub; o._relisting = new Date().toISOString(); await db.update(schema.variants).set({ overrides: o }).where(eq(schema.variants.id, variantId)); }
+  }
+  const cur = await T.getProduct(targetProductId);
+  if (effectiveListing(cur) !== 'UNLISTED') {
+    if (variantId) await saveVariantFromTarget(variantId, { ...cur, id: targetProductId });
+    return { status: 'already listed', detail: `${effectiveListing(cur) ?? 'unknown'} on Target; Send is back to automatic` };
+  }
+  const r = await T.relistProduct(targetProductId, { external_id: cur.external_id, relationship_type: cur.relationship_type, fields: cur.fields ?? [] });
+  const after = await T.getProduct(targetProductId).catch(() => ({ ...r, id: targetProductId }));
+  if (variantId) {
+    await saveVariantFromTarget(variantId, { ...after, id: targetProductId });
+    await enqueue('price', variantId, { force: true });
+    await enqueue('inventory', variantId, { force: true });
+  }
+  const { storeTargetProduct } = await import('./targetCatalog.js');
+  if (after?.fields) await storeTargetProduct({ ...after, id: targetProductId }).catch(() => null);
+  const now = effectiveListing(after);
+  return { status: 'relist sent', detail: now === 'UNLISTED' ? 'sent: Target reviews the new version, then it is on sale (shows unlisted until approved; price & stock are already sent)' : `now ${now ?? 'sent'} on Target` };
 }
 
 export async function unlistVariant(variantId: string) {

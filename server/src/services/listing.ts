@@ -1,6 +1,6 @@
 // One place that decides "is this item unlisted on Target?" and "may the hub send to this SKU?".
 // Target keeps several versions of an item. An item counts as UNLISTED when its current (selling) version or its
-// latest version is unlisted, or when the newest unlisted version is not older than the newest approved one.
+// latest version is unlisted (or, without those flags, its newest version is).
 // (Reading only the latest version missed unlisted items whose newer update was pending/rejected, so the hub
 // thought they were listed and sent updates that put them on sale again.)
 
@@ -9,9 +9,9 @@ export function effectiveListing(prod: any): string | null {
   if (!st.length) return null;
   const ver = (s: any) => Number(s?.version ?? 0);
   if (st.some((s) => s.listing_status === 'UNLISTED' && (s.current || s.latest))) return 'UNLISTED';
-  const unl = st.filter((s) => s.listing_status === 'UNLISTED');
-  const appr = st.filter((s) => s.listing_status === 'APPROVED');
-  if (unl.length && (!appr.length || Math.max(...unl.map(ver)) >= Math.max(...appr.map(ver)))) return 'UNLISTED';
+  // no current/latest flags: the newest version decides (a newer version after an unlist = listed again on purpose)
+  const newest = [...st].sort((a, b) => ver(b) - ver(a))[0];
+  if (!st.some((s) => s.current || s.latest) && newest?.listing_status === 'UNLISTED') return 'UNLISTED';
   const latest = st.find((s) => s.latest) ?? st.find((s) => s.current) ?? [...st].sort((a, b) => ver(b) - ver(a))[0];
   return latest?.listing_status ?? null;
 }

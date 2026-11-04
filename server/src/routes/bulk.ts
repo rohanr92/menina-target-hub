@@ -4,7 +4,7 @@ import { db, schema } from '../db/index.js';
 import { env } from '../lib/env.js';
 import { getShopify, getSync } from '../lib/settings.js';
 import { shopifyGraphql } from '../shopify/client.js';
-import { unlistVariant } from '../services/items.js';
+import { relistTargetProduct, unlistVariant } from '../services/items.js';
 import { enqueue } from '../services/sync.js';
 import { fillFromListedSize } from '../services/grid.js';
 import { contentEditor, saveContent } from '../services/contentEditor.js';
@@ -152,8 +152,21 @@ export default async function (app: FastifyInstance) {
 
   /** Unlist by TCIN / barcode: check what the codes match, then unlist them all in the background. */
   app.post('/api/bulk/unlist-codes/check', async (req) => matchCodes(String((req.body as any)?.text ?? '')));
-  app.post('/api/bulk/unlist-codes', async (req) => startUnlistCodes(String((req.body as any)?.text ?? '')));
+  app.post('/api/bulk/unlist-codes', async (req) => startUnlistCodes(String((req.body as any)?.text ?? ''), (req.body as any)?.action === 'relist' ? 'relist' : 'unlist'));
   app.get('/api/bulk/unlist-codes', async () => unlistJob);
+
+  /** List again on Target (selected SKUs). */
+  app.post('/api/bulk/relist', async (req) => {
+    const ids = await idsFrom(req.body);
+    const results: any[] = [];
+    for (const id of ids) {
+      const v = await db.query.variants.findFirst({ where: eq(schema.variants.id, id) });
+      if (!v?.targetProductId) { results.push({ sku: v?.sku, ok: false, error: 'not on Target' }); continue; }
+      try { const r = await relistTargetProduct(v.targetProductId, v.id); results.push({ sku: v.sku, ok: true, ...r }); }
+      catch (e: any) { results.push({ sku: v?.sku, ok: false, error: e?.message ?? String(e) }); }
+    }
+    return { relisted: results.filter((r) => r.ok && r.status === 'relist sent').length, already: results.filter((r) => r.status === 'already listed').length, failed: results.filter((r) => !r.ok).length, results };
+  });
 
   /** Unlist on Target (approved items only). */
   app.post('/api/bulk/unlist', async (req) => {

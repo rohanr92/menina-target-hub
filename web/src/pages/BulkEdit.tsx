@@ -187,6 +187,7 @@ function SkuModal({ variantId, onClose, onImages }: { variantId: string; onClose
 // ---------------------------------------------------------------- auto-map dialog
 /** Unlist by TCIN or barcode: paste codes (a column from Excel), check, then unlist. Each item gets Send OFF first. */
 function UnlistCodesModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const [mode, setMode] = useState<'unlist' | 'relist'>('unlist');
   const [text, setText] = useState('');
   const [check, setCheck] = useState<any>(null);
   const [job, setJob] = useState<any>(null);
@@ -205,9 +206,14 @@ function UnlistCodesModal({ onClose, onDone }: { onClose: () => void; onDone: ()
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' })); a.download = 'unlist-results.csv'; a.click();
   };
   return (
-    <Modal wide title="Unlist by TCIN or barcode" onClose={onClose}>
+    <Modal wide title={mode === 'unlist' ? 'Unlist by TCIN or barcode' : 'List again (relist) by TCIN or barcode'} onClose={onClose}>
       {!job && (
         <>
+          <div className="row" style={{ gap: 6, marginBottom: 10 }}>
+            <button className={`btn sm ${mode === 'unlist' ? 'primary' : ''}`} onClick={() => { setMode('unlist'); setCheck(null); }}>Unlist</button>
+            <button className={`btn sm ${mode === 'relist' ? 'primary' : ''}`} onClick={() => { setMode('relist'); setCheck(null); }}>List again</button>
+          </div>
+          {mode === 'relist' && <p className="small" style={{ marginTop: 0, color: '#1d4ed8' }}>List again: each unlisted item gets its own current Target content sent back unchanged; Target reviews it and puts it back on sale. Send goes back to automatic, then price and stock follow. Items already listed are left alone.</p>}
           <p className="small muted" style={{ marginTop: 0 }}>
             Paste TCINs and/or barcodes (copy the column(s) from Excel; one per line or mixed). A parent TCIN means all of its sizes.
             Each item is switched to <b>Send OFF</b> first (no content, images or price ever sent again; stock 0), then its live version is unlisted and Target is read again to confirm.
@@ -215,11 +221,12 @@ function UnlistCodesModal({ onClose, onDone }: { onClose: () => void; onDone: ()
           <textarea rows={8} value={text} onChange={(e) => { setText(e.target.value); setCheck(null); }} placeholder={'1012951791\n810228938753\n…'} />
           <div className="row" style={{ marginTop: 10, gap: 8 }}>
             <Btn busy={busy === 'check'} disabled={!n} onClick={() => run('check', async () => { const r = await post('/api/bulk/unlist-codes/check', { text }); setCheck(r); return r; }, (r: any) => `${r.items.length} Target item(s) found${r.notFound.length ? ` · ${r.notFound.length} code(s) not found` : ''}`)}>Check {n ? `${n} code(s)` : ''}</Btn>
-            {check?.items?.length > 0 && <Btn kind="danger" busy={busy === 'go'} onClick={() => confirm(`Unlist ${check.counts.toUnlist} item(s) on Target?\n\n${check.counts.alreadyUnlisted} are already unlisted (they only get Send OFF).`) && run('go', async () => { const r = await post('/api/bulk/unlist-codes', { text }); setJob({ running: true, total: r.total, done: 0, results: [] }); return r; }, (r: any) => `Unlisting ${r.total} item(s)…`)}>Unlist {check.items.length} item(s)</Btn>}
+            {check?.items?.length > 0 && mode === 'unlist' && <Btn kind="danger" busy={busy === 'go'} onClick={() => confirm(`Unlist ${check.counts.toUnlist} item(s) on Target?\n\n${check.counts.alreadyUnlisted} are already unlisted (they only get Send OFF).`) && run('go', async () => { const r = await post('/api/bulk/unlist-codes', { text, action: 'unlist' }); setJob({ action: 'unlist', running: true, total: r.total, done: 0, results: [] }); return r; }, (r: any) => `Unlisting ${r.total} item(s)…`)}>Unlist {check.items.length} item(s)</Btn>}
+            {check?.items?.length > 0 && mode === 'relist' && <Btn kind="primary" busy={busy === 'go'} onClick={() => confirm(`List ${check.counts.toRelist} unlisted item(s) on Target again?`) && run('go', async () => { const r = await post('/api/bulk/unlist-codes', { text, action: 'relist' }); setJob({ action: 'relist', running: true, total: r.total, done: 0, results: [] }); return r; }, (r: any) => `Relisting ${r.total} item(s)…`)}>List {check.counts.toRelist} item(s) again</Btn>}
           </div>
           {check && (
             <div style={{ marginTop: 14 }}>
-              <div className="small" style={{ marginBottom: 6 }}><b>{check.counts.toUnlist}</b> to unlist · <b>{check.counts.alreadyUnlisted}</b> already unlisted · {check.counts.inHub} in the hub · {check.items.length - check.counts.inHub} only on Target</div>
+              <div className="small" style={{ marginBottom: 6 }}>{mode === 'unlist' ? <><b>{check.counts.toUnlist}</b> to unlist · <b>{check.counts.alreadyUnlisted}</b> already unlisted</> : <><b>{check.counts.toRelist}</b> to list again · <b>{check.counts.toUnlist}</b> already listed</>} · {check.counts.inHub} in the hub · {check.items.length - check.counts.inHub} only on Target</div>
               {check.notFound.length > 0 && <div className="small warn" style={{ marginBottom: 6 }}>Not found ({check.notFound.length}): {check.notFound.slice(0, 30).join(', ')}{check.notFound.length > 30 ? '…' : ''} — run Target catalog › Sync if these are new.</div>}
               <div className="table-wrap" style={{ maxHeight: 320, overflow: 'auto' }}><table>
                 <thead><tr><th>SKU</th><th>TCIN</th><th>Barcode</th><th>Title</th><th>Status now</th></tr></thead>
@@ -231,17 +238,20 @@ function UnlistCodesModal({ onClose, onDone }: { onClose: () => void; onDone: ()
       )}
       {job && (
         <div>
-          <div style={{ fontWeight: 600, marginBottom: 6 }}>{job.running ? `Unlisting… ${job.done} of ${job.total}` : `Done: ${job.total} item(s)`}</div>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>{job.running ? `${job.action === 'relist' ? 'Relisting' : 'Unlisting'}… ${job.done} of ${job.total}` : `Done: ${job.total} item(s)`}</div>
           <div style={{ height: 8, background: '#f1f5f9', borderRadius: 6, marginBottom: 10 }}><div style={{ width: `${job.total ? (job.done / job.total) * 100 : 0}%`, height: '100%', background: '#4f46e5', borderRadius: 6 }} /></div>
           <div className="small" style={{ marginBottom: 8 }}>
-            <b style={{ color: '#047857' }}>{cnt('unlisted')} unlisted (confirmed by Target)</b> · {cnt('already unlisted')} already unlisted · {cnt('not live')} never live · <b className={cnt('failed') ? 'bad' : ''}>{cnt('failed')} failed</b>
+            {job.action === 'relist'
+              ? <><b style={{ color: '#047857' }}>{cnt('relist sent')} sent to relist</b> · {cnt('already listed')} already listed</>
+              : <><b style={{ color: '#047857' }}>{cnt('unlisted')} unlisted (confirmed by Target)</b> · {cnt('already unlisted')} already unlisted · {cnt('not live')} never live</>}
+            {' · '}<b className={cnt('failed') ? 'bad' : ''}>{cnt('failed')} failed</b>
             {!job.running && res.length > 0 && <> · <a href="#" onClick={(e) => { e.preventDefault(); csv(); }}>Download results (CSV)</a></>}
           </div>
           <div className="table-wrap" style={{ maxHeight: 340, overflow: 'auto' }}><table>
             <thead><tr><th>SKU</th><th>TCIN</th><th>Result</th><th>Detail</th></tr></thead>
             <tbody>{[...res].reverse().map((r, i) => <tr key={i}><td className="mono small">{r.sku ?? '—'}</td><td className="mono small">{r.tcin ?? '—'}</td><td className={`small ${r.ok ? '' : 'bad'}`}>{r.result}</td><td className="small muted">{r.detail ?? ''}</td></tr>)}</tbody>
           </table></div>
-          {!job.running && <div className="row" style={{ marginTop: 10 }}><Btn onClick={() => { setJob(null); setCheck(null); setText(''); }}>Unlist more</Btn></div>}
+          {!job.running && <div className="row" style={{ marginTop: 10 }}><Btn onClick={() => { setJob(null); setCheck(null); setText(''); }}>Do more</Btn></div>}
         </div>
       )}
     </Modal>
@@ -525,7 +535,7 @@ export default function BulkEdit() {
     <div className="page page-wide">
       <PageHead title="Bulk mapping" sub="Every SKU in one grid. Fill Target fields one by one, select rows to set many at once, let Auto-map fill them from Shopify, or work in Excel and upload.">
         <Btn onClick={() => setAutoOpen(true)}>✨ Auto-map</Btn>
-        <Btn kind="danger" onClick={() => setUnlistOpen(true)} title="Paste TCINs or barcodes and unlist them on Target">Unlist by TCIN / barcode</Btn>
+        <Btn kind="danger" onClick={() => setUnlistOpen(true)} title="Paste TCINs or barcodes and unlist them on Target">Unlist / relist by TCIN / barcode</Btn>
         <Btn busy={busy === 'stat'} title="Reads every item's listing status from Target (also runs by itself every 3 hours)" onClick={() => run('stat', () => post('/api/products/refresh-all'), (r: any) => `Target status updated for ${r.updated} items`).then(reload)}>↻ Target status</Btn>
         <div className="menu-wrap">
           <Btn disabled={!typed} title={typed ? '' : 'Pick an item type tab first'} onClick={() => setSheetOpen(!sheetOpen)}>Download sheet ▾</Btn>
@@ -596,6 +606,12 @@ export default function BulkEdit() {
             setSend(live.map((x) => x.variantId), false);
             return r;
           }, (r: any) => (r ? `${r.unlisted} unlisted${r.failed ? ` · ${r.failed} failed: ${r.results.filter((x: any) => !x.ok).slice(0, 3).map((x: any) => `${x.sku} (${x.error})`).join(', ')}` : ''}` : 'Cancelled')).then(reload)}>{busy === 'unlist' ? 'Unlisting…' : 'Unlist'}</button>
+          <button className="btn sm" style={{ background: '#2563eb', color: '#fff', borderColor: '#2563eb' }} title="List unlisted SKUs on Target again" onClick={() => run('relist', async () => {
+            const un = selRows.filter((r) => r.onTarget && r.listingStatus === 'UNLISTED');
+            if (!un.length) throw new Error('None of the selected SKUs are unlisted on Target. Click “↻ Target status” first if you unlisted them in the Target portal.');
+            if (!confirm(`List ${un.length} SKU(s) on Target again?\n\nEach one gets its own current Target content sent back (nothing changes), Target reviews it (usually minutes to hours) and it goes back on sale. Send goes back to automatic, then price and stock are sent.`)) return null;
+            return post('/api/bulk/relist', { variantIds: un.map((x) => x.variantId) });
+          }, (r: any) => (r ? `${r.relisted} sent to relist${r.already ? ` · ${r.already} already listed` : ''}${r.failed ? ` · ${r.failed} failed: ${r.results.filter((x: any) => !x.ok).slice(0, 3).map((x: any) => `${x.sku} (${x.error})`).join(', ')}` : ''}` : 'Cancelled')).then(reload)}>{busy === 'relist' ? 'Relisting…' : 'Relist'}</button>
           <button className="btn sm primary" onClick={() => run('push', async () => {
             const on = selRows.filter((r) => sendOf(r));
             const off = selRows.length - on.length;

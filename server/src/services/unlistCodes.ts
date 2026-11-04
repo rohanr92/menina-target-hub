@@ -2,7 +2,7 @@
 import { eq } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { getActiveEnv } from '../lib/settings.js';
-import { unlistTargetProduct } from './items.js';
+import { relistTargetProduct, unlistTargetProduct } from './items.js';
 import { normBarcode } from './targetCatalog.js';
 
 export interface UnlistRow {
@@ -56,25 +56,25 @@ export async function matchCodes(text: string) {
   const list = [...rows.values()];
   return {
     codes: codes.length, items: list, notFound,
-    counts: { toUnlist: list.filter((r) => r.status !== 'UNLISTED').length, alreadyUnlisted: list.filter((r) => r.status === 'UNLISTED').length, inHub: list.filter((r) => r.variantId).length },
+    counts: { toUnlist: list.filter((r) => r.status !== 'UNLISTED').length, toRelist: list.filter((r) => r.status === 'UNLISTED').length, alreadyUnlisted: list.filter((r) => r.status === 'UNLISTED').length, inHub: list.filter((r) => r.variantId).length },
   };
 }
 
-export const unlistJob: { running: boolean; total: number; done: number; startedAt: string | null; finishedAt: string | null; results: any[] } = {
-  running: false, total: 0, done: 0, startedAt: null, finishedAt: null, results: [],
+export const unlistJob: { action: 'unlist' | 'relist'; running: boolean; total: number; done: number; startedAt: string | null; finishedAt: string | null; results: any[] } = {
+  action: 'unlist', running: false, total: 0, done: 0, startedAt: null, finishedAt: null, results: [],
 };
 
 /** Unlist every matched item (in the background). Each one: Send OFF → unlist the live version → Target confirms. */
-export async function startUnlistCodes(text: string) {
-  if (unlistJob.running) throw Object.assign(new Error('An unlist is already running'), { statusCode: 409 });
+export async function startUnlistCodes(text: string, action: 'unlist' | 'relist' = 'unlist') {
+  if (unlistJob.running) throw Object.assign(new Error(`An ${unlistJob.action} is already running`), { statusCode: 409 });
   const m = await matchCodes(text);
   if (!m.items.length) throw Object.assign(new Error('No Target items found for these codes'), { statusCode: 400 });
-  Object.assign(unlistJob, { running: true, total: m.items.length, done: 0, startedAt: new Date().toISOString(), finishedAt: null, results: [] });
+  Object.assign(unlistJob, { action, running: true, total: m.items.length, done: 0, startedAt: new Date().toISOString(), finishedAt: null, results: [] });
   (async () => {
     for (const r of m.items) {
       const base = { sku: r.sku, tcin: r.tcin, barcode: r.barcode, title: r.title, codes: r.codes };
       try {
-        const x = await unlistTargetProduct(r.targetId, r.variantId);
+        const x = action === 'relist' ? await relistTargetProduct(r.targetId, r.variantId) : await unlistTargetProduct(r.targetId, r.variantId);
         unlistJob.results.push({ ...base, ok: true, result: x.status, detail: x.detail });
       } catch (e: any) {
         unlistJob.results.push({ ...base, ok: false, result: 'failed', detail: e?.message ?? String(e) });

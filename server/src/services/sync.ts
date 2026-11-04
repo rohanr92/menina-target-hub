@@ -122,7 +122,7 @@ async function runTask(task: typeof schema.syncTasks.$inferSelect) {
   if (!v.syncEnabled) return { skipped: 'sync disabled for this variant' };
 
   // Send OFF (or unlisted on Target): no price, no logistics; stock is sent as 0 so it cannot be sold
-  const sendOn = sendEnabled(v);
+  const sendOn = sendEnabled(v) || !!(v.overrides as any)?._relisting; // relisting: price & stock go while Target reviews
   if (!sendOn && task.kind === 'price') return { skipped: v.listingStatus === 'UNLISTED' ? 'unlisted on Target: price not sent' : 'Send is OFF: price not sent' };
   if (!sendOn && task.kind === 'logistics') return { skipped: 'Send is OFF' };
   if (task.kind === 'price') {
