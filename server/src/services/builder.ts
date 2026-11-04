@@ -453,7 +453,7 @@ export async function buildProduct(productId: string, opts: { checkOff?: boolean
   else { for (const v of vs) if (strictFor(v, 'VC')) kept.add(v.sku ?? v.id); if (strictFor(null, 'VAP')) kept.add('parent'); }
   validateContent(result, contentAttrs, kept);
   // sizes that are unlisted on Target or switched to Send OFF are never sent, so their problems don't matter
-  const sendOn = (v: Variant) => { const x = (v.overrides as any)?._send; return x === true || x === false ? x : v.listingStatus !== 'UNLISTED'; };
+  const sendOn = (v: Variant) => v.listingStatus !== 'UNLISTED' && (v.overrides as any)?._send !== false;
   const off = new Set(vs.filter((v) => !sendOn(v)).map((v) => v.sku ?? v.id));
   if (off.size && !opts.checkOff) {
     result.issues = result.issues.filter((i) => !off.has(i.scope));

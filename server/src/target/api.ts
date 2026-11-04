@@ -108,7 +108,26 @@ export async function createProduct(p: ProductUpdate) {
 export async function createOrUpdateVariationFamily(body: { parent: ProductUpdate; children: ProductUpdate[] }) {
   return (await targetRequest('sellers', 'POST', `/sellers/${await sellerId()}/product_variation_update`, { body, source: 'items', nonIdempotent: true })).data;
 }
+/**
+ * Last safety check before ANY item update (content, images, parent): never send to a SKU whose Send is OFF or that
+ * is unlisted on Target right now (read fresh). An update creates a new version, which would put it on sale again.
+ */
+export async function assertMayUpdate(productId: string) {
+  const { db, schema } = await import('../db/index.js');
+  const { eq } = await import('drizzle-orm');
+  const { effectiveListing } = await import('../services/listing.js');
+  const blocked = (msg: string) => Object.assign(new Error(msg), { blocked: true });
+  const v = await db.query.variants.findFirst({ where: eq(schema.variants.targetProductId, productId) });
+  if (v && (v.overrides as any)?._send === false) throw blocked('Send is OFF for this SKU: nothing sent');
+  const cur = await getProduct(productId);
+  if (effectiveListing(cur) === 'UNLISTED') {
+    if (v) await db.update(schema.variants).set({ listingStatus: 'UNLISTED', overrides: { ...((v.overrides as any) ?? {}), _send: false }, statusCheckedAt: new Date() }).where(eq(schema.variants.id, v.id));
+    throw blocked('Unlisted on Target: not sent, so it stays unlisted (Send turned OFF)');
+  }
+  return cur;
+}
 export async function updateProduct(productId: string, p: ProductUpdate) {
+  await assertMayUpdate(productId);
   return (await targetRequest('sellers', 'PUT', `/sellers/${await sellerId()}/products/${encodeURIComponent(productId)}`, { body: p, source: 'items' })).data;
 }
 export async function getProduct(productId: string) {

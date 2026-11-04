@@ -4,7 +4,7 @@ import * as T from '../target/api.js';
 import { detectOptions } from './builder.js';
 import { reloadProductFromShopify } from './catalog.js';
 import { storeTargetProduct } from './targetCatalog.js';
-import { sendEnabled } from './items.js';
+import { effectiveListing, sendEnabled } from './listing.js';
 
 /**
  * Image plan per color, chosen by hand in the hub (drag & drop of the Shopify images):
@@ -100,13 +100,13 @@ export async function pushImages(productId: string, opts: { colors?: string[] } 
     try {
       const cur = await T.getProduct(v.targetProductId); // fresh copy: never send stale fields back
       // never touch items you unlisted: any update creates a new version, which could list the size again
-      const st = (cur.product_statuses ?? []).find((x: any) => x.latest) ?? (cur.product_statuses ?? []).find((x: any) => x.current);
-      const cs = (cur.product_statuses ?? []).find((x: any) => x.current);
-      if ([st?.listing_status, cs?.listing_status].includes('UNLISTED') || v.listingStatus === 'UNLISTED') {
+      if (effectiveListing(cur) === 'UNLISTED' || v.listingStatus === 'UNLISTED') {
         results.push({ sku: v.sku, color, action: 'skipped', reason: 'unlisted on Target (kept unlisted)' }); continue;
       }
       const fields = withImages(cur.fields ?? [], urls, cur.relationship_type ?? 'VC');
-      const r = await T.updateProduct(v.targetProductId, { external_id: cur.external_id, relationship_type: cur.relationship_type, fields });
+      let r: any;
+      try { r = await T.updateProduct(v.targetProductId, { external_id: cur.external_id, relationship_type: cur.relationship_type, fields }); }
+      catch (e: any) { if (!e?.blocked) throw e; results.push({ sku: v.sku, color, action: 'skipped', reason: e.message }); continue; }
       await storeTargetProduct({ ...cur, ...r, id: r?.id ?? v.targetProductId, fields });
       results.push({ sku: v.sku, color, action: 'images sent', count: urls.length });
     } catch (e: any) {

@@ -22,7 +22,7 @@ async function saveVariantFromTarget(variantId: string, prod: any) {
   await db.update(schema.variants).set({
     targetProductId: prod.id ?? undefined,
     tcin: tcinOf(prod),
-    listingStatus: s?.listing_status ?? undefined,
+    listingStatus: effectiveListing(prod) ?? s?.listing_status ?? undefined,
     validationStatus: s?.validation_status ?? undefined,
     errors: s?.errors ?? [],
     statusCheckedAt: new Date(),
@@ -34,7 +34,7 @@ async function saveParentFromTarget(productId: string, prod: any) {
   await db.update(schema.products).set({
     targetParentId: prod.id ?? undefined,
     targetParentTcin: tcinOf(prod),
-    parentStatus: s?.listing_status ?? undefined,
+    parentStatus: effectiveListing(prod) ?? s?.listing_status ?? undefined,
     parentValidation: s?.validation_status ?? undefined,
     parentErrors: s?.errors ?? [],
   }).where(eq(schema.products.id, productId));
@@ -42,12 +42,8 @@ async function saveParentFromTarget(productId: string, prod: any) {
 
 export interface PushOptions { allowWarnings?: boolean; force?: boolean; onlyNew?: boolean; onlyVariantIds?: string[] }
 
-/** Send switch per SKU: explicit on/off, otherwise OFF for items unlisted on Target (an update would list them again). */
-export function sendEnabled(v: { overrides: any; listingStatus: string | null }) {
-  const s = (v.overrides as any)?._send;
-  if (s === true || s === false) return s;
-  return v.listingStatus !== 'UNLISTED';
-}
+import { effectiveListing, sendEnabled } from './listing.js';
+export { sendEnabled };
 
 /**
  * Send a product to Target.
@@ -90,7 +86,9 @@ export async function pushProduct(productId: string, opts: PushOptions = {}) {
         const v = byId.get(it.variantId!)!;
         if (v.targetProductId) {
           if (opts.onlyNew) continue;
-          const r = await T.updateProduct(v.targetProductId, it.payload);
+          let r: any;
+          try { r = await T.updateProduct(v.targetProductId, it.payload); }
+          catch (e: any) { if (!e?.blocked) throw e; results.push({ sku: it.sku, action: 'skipped', reason: e.message }); continue; }
           await saveVariantFromTarget(v.id, { ...r, id: r?.id ?? v.targetProductId });
           results.push({ sku: it.sku, action: 'updated', id: v.targetProductId });
         } else {
@@ -136,14 +134,18 @@ export async function pushProduct(productId: string, opts: PushOptions = {}) {
         }
         await db.update(schema.products).set({ parentExternalId: built.parent.external_id }).where(eq(schema.products.id, productId));
       } else if (!opts.onlyNew && p.targetParentId && !parentLocked) {
-        const r = await T.updateProduct(p.targetParentId, built.parent);
-        await saveParentFromTarget(productId, { ...r, id: r?.id ?? p.targetParentId });
-        results.push({ sku: built.parent.external_id, action: 'parent updated' });
+        try {
+          const r = await T.updateProduct(p.targetParentId, built.parent);
+          await saveParentFromTarget(productId, { ...r, id: r?.id ?? p.targetParentId });
+          results.push({ sku: built.parent.external_id, action: 'parent updated' });
+        } catch (e: any) { if (!e?.blocked) throw e; results.push({ sku: built.parent.external_id, action: 'skipped', reason: `parent: ${e.message}` }); }
       }
       if (!opts.onlyNew) {
         for (const it of existingChildren) {
           const v = byId.get(it.variantId!)!;
-          const r = await T.updateProduct(v.targetProductId!, it.payload);
+          let r: any;
+          try { r = await T.updateProduct(v.targetProductId!, it.payload); }
+          catch (e: any) { if (!e?.blocked) throw e; results.push({ sku: it.sku, action: 'skipped', reason: e.message }); continue; }
           await saveVariantFromTarget(v.id, { ...r, id: r?.id ?? v.targetProductId });
           results.push({ sku: it.sku, action: 'updated', id: v.targetProductId });
         }
@@ -239,18 +241,44 @@ export async function refreshPending() {
   return vs.length;
 }
 
+/**
+ * Unlist one item on Target (by its Target product id) and make sure it stays unlisted:
+ *  1. the hub SKU (if any) gets Send OFF first, so nothing can be sent to it again (content, images, price; stock 0)
+ *  2. the LIVE version is unlisted (an item can show "Rejected" for its latest update while an older approved
+ *     version is still selling)
+ *  3. Target is read again to confirm it is unlisted
+ */
+export async function unlistTargetProduct(targetProductId: string, variantId?: string | null): Promise<{ status: 'unlisted' | 'already unlisted' | 'not live'; detail?: string }> {
+  if (variantId) {
+    const v0 = await db.query.variants.findFirst({ where: eq(schema.variants.id, variantId) });
+    if (v0) await db.update(schema.variants).set({ overrides: { ...((v0.overrides as any) ?? {}), _send: false, _unlisted_by_hub: new Date().toISOString() } }).where(eq(schema.variants.id, variantId));
+  }
+  const save = async (prod: any) => {
+    if (variantId) await saveVariantFromTarget(variantId, { ...prod, id: targetProductId });
+    const { storeTargetProduct } = await import('./targetCatalog.js');
+    if (prod?.fields) await storeTargetProduct({ ...prod, id: targetProductId }).catch(() => null);
+    else await db.update(schema.targetItems).set({ listingStatus: effectiveListing(prod) ?? undefined }).where(eq(schema.targetItems.id, targetProductId));
+  };
+  const prod = await T.getProduct(targetProductId);
+  if (effectiveListing(prod) === 'UNLISTED') { await save(prod); return { status: 'already unlisted' }; }
+  const sts: any[] = prod?.product_statuses ?? [];
+  const live = sts.find((x) => x.current && x.listing_status === 'APPROVED') ?? sts.find((x) => x.listing_status === 'APPROVED');
+  if (!live) { await save(prod); return { status: 'not live', detail: `${effectiveListing(prod) ?? 'unknown'}, never approved: not on sale. Send is OFF so it is never sent.` }; }
+  if (live.current) await T.unlistProduct(targetProductId); else await T.unlistByStatus(targetProductId, live.id);
+  // confirm with Target
+  let after = await T.getProduct(targetProductId);
+  if (effectiveListing(after) !== 'UNLISTED') { await new Promise((r) => setTimeout(r, 2000)); after = await T.getProduct(targetProductId); }
+  await save(after);
+  if (effectiveListing(after) !== 'UNLISTED') throw new Error(`Target did not confirm the unlist (now ${effectiveListing(after) ?? 'unknown'}). Send is OFF; try again or unlist it in the Target portal.`);
+  return { status: 'unlisted' };
+}
+
 export async function unlistVariant(variantId: string) {
   const v = await db.query.variants.findFirst({ where: eq(schema.variants.id, variantId) });
   if (!v?.targetProductId) throw new Error('Item is not on Target yet');
-  // the LIVE version decides: an item can show "Rejected" (its latest update was rejected) while an older approved
-  // version is still selling. That live version can be unlisted. An item that was never approved is not on sale.
-  const prod = await T.getProduct(v.targetProductId);
-  const sts: any[] = prod?.product_statuses ?? [];
-  const live = sts.find((x) => x.current && x.listing_status === 'APPROVED') ?? sts.find((x) => x.listing_status === 'APPROVED');
-  if (sts.some((x) => x.current && x.listing_status === 'UNLISTED')) { await saveVariantFromTarget(v.id, prod); throw new Error('Already unlisted on Target'); }
-  if (!live) { await saveVariantFromTarget(v.id, prod); throw new Error(`Not live on Target (${latestStatus(prod)?.listing_status ?? v.listingStatus ?? 'unknown'}, never approved), so there is nothing to unlist. Turn Send OFF so it is not sent again.`); }
-  const r = live.current ? await T.unlistProduct(v.targetProductId) : await T.unlistByStatus(v.targetProductId, live.id);
-  await saveVariantFromTarget(v.id, { ...r, id: v.targetProductId });
+  const r = await unlistTargetProduct(v.targetProductId, v.id);
+  if (r.status === 'already unlisted') throw new Error('Already unlisted on Target (Send is now OFF)');
+  if (r.status === 'not live') throw new Error(`Not live on Target (${r.detail})`);
   return r;
 }
 

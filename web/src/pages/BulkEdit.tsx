@@ -185,6 +185,69 @@ function SkuModal({ variantId, onClose, onImages }: { variantId: string; onClose
 }
 
 // ---------------------------------------------------------------- auto-map dialog
+/** Unlist by TCIN or barcode: paste codes (a column from Excel), check, then unlist. Each item gets Send OFF first. */
+function UnlistCodesModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const [text, setText] = useState('');
+  const [check, setCheck] = useState<any>(null);
+  const [job, setJob] = useState<any>(null);
+  const { busy, run } = useAction();
+  const n = (text.match(/\d{6,14}/g) ?? []).length;
+  useEffect(() => {
+    if (!job?.running) return;
+    const t = setInterval(async () => { const j = await get('/api/bulk/unlist-codes'); setJob(j); if (!j.running) { clearInterval(t); onDone(); } }, 2000);
+    return () => clearInterval(t);
+  }, [job?.running]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { get('/api/bulk/unlist-codes').then((j: any) => { if (j.running) setJob(j); }).catch(() => null); }, []);
+  const res: any[] = job?.results ?? [];
+  const cnt = (k: string) => res.filter((r) => r.result === k).length;
+  const csv = () => {
+    const lines = [['SKU', 'TCIN', 'Barcode', 'Result', 'Detail'].join(','), ...res.map((r) => [r.sku, r.tcin, r.barcode, r.result, `"${String(r.detail ?? '').replace(/"/g, "'")}"`].join(','))];
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' })); a.download = 'unlist-results.csv'; a.click();
+  };
+  return (
+    <Modal wide title="Unlist by TCIN or barcode" onClose={onClose}>
+      {!job && (
+        <>
+          <p className="small muted" style={{ marginTop: 0 }}>
+            Paste TCINs and/or barcodes (copy the column(s) from Excel; one per line or mixed). A parent TCIN means all of its sizes.
+            Each item is switched to <b>Send OFF</b> first (no content, images or price ever sent again; stock 0), then its live version is unlisted and Target is read again to confirm.
+          </p>
+          <textarea rows={8} value={text} onChange={(e) => { setText(e.target.value); setCheck(null); }} placeholder={'1012951791\n810228938753\n…'} />
+          <div className="row" style={{ marginTop: 10, gap: 8 }}>
+            <Btn busy={busy === 'check'} disabled={!n} onClick={() => run('check', async () => { const r = await post('/api/bulk/unlist-codes/check', { text }); setCheck(r); return r; }, (r: any) => `${r.items.length} Target item(s) found${r.notFound.length ? ` · ${r.notFound.length} code(s) not found` : ''}`)}>Check {n ? `${n} code(s)` : ''}</Btn>
+            {check?.items?.length > 0 && <Btn kind="danger" busy={busy === 'go'} onClick={() => confirm(`Unlist ${check.counts.toUnlist} item(s) on Target?\n\n${check.counts.alreadyUnlisted} are already unlisted (they only get Send OFF).`) && run('go', async () => { const r = await post('/api/bulk/unlist-codes', { text }); setJob({ running: true, total: r.total, done: 0, results: [] }); return r; }, (r: any) => `Unlisting ${r.total} item(s)…`)}>Unlist {check.items.length} item(s)</Btn>}
+          </div>
+          {check && (
+            <div style={{ marginTop: 14 }}>
+              <div className="small" style={{ marginBottom: 6 }}><b>{check.counts.toUnlist}</b> to unlist · <b>{check.counts.alreadyUnlisted}</b> already unlisted · {check.counts.inHub} in the hub · {check.items.length - check.counts.inHub} only on Target</div>
+              {check.notFound.length > 0 && <div className="small warn" style={{ marginBottom: 6 }}>Not found ({check.notFound.length}): {check.notFound.slice(0, 30).join(', ')}{check.notFound.length > 30 ? '…' : ''} — run Target catalog › Sync if these are new.</div>}
+              <div className="table-wrap" style={{ maxHeight: 320, overflow: 'auto' }}><table>
+                <thead><tr><th>SKU</th><th>TCIN</th><th>Barcode</th><th>Title</th><th>Status now</th></tr></thead>
+                <tbody>{check.items.map((r: any) => <tr key={r.targetId}><td className="mono small">{r.sku ?? '—'}</td><td className="mono small">{r.tcin ?? '—'}</td><td className="mono small">{r.barcode ?? '—'}</td><td className="small">{r.title ?? '—'}{r.viaParent ? <span className="muted"> · via parent {r.viaParent}</span> : null}</td><td><Status value={r.status ?? 'unknown'} /></td></tr>)}</tbody>
+              </table></div>
+            </div>
+          )}
+        </>
+      )}
+      {job && (
+        <div>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>{job.running ? `Unlisting… ${job.done} of ${job.total}` : `Done: ${job.total} item(s)`}</div>
+          <div style={{ height: 8, background: '#f1f5f9', borderRadius: 6, marginBottom: 10 }}><div style={{ width: `${job.total ? (job.done / job.total) * 100 : 0}%`, height: '100%', background: '#4f46e5', borderRadius: 6 }} /></div>
+          <div className="small" style={{ marginBottom: 8 }}>
+            <b style={{ color: '#047857' }}>{cnt('unlisted')} unlisted (confirmed by Target)</b> · {cnt('already unlisted')} already unlisted · {cnt('not live')} never live · <b className={cnt('failed') ? 'bad' : ''}>{cnt('failed')} failed</b>
+            {!job.running && res.length > 0 && <> · <a href="#" onClick={(e) => { e.preventDefault(); csv(); }}>Download results (CSV)</a></>}
+          </div>
+          <div className="table-wrap" style={{ maxHeight: 340, overflow: 'auto' }}><table>
+            <thead><tr><th>SKU</th><th>TCIN</th><th>Result</th><th>Detail</th></tr></thead>
+            <tbody>{[...res].reverse().map((r, i) => <tr key={i}><td className="mono small">{r.sku ?? '—'}</td><td className="mono small">{r.tcin ?? '—'}</td><td className={`small ${r.ok ? '' : 'bad'}`}>{r.result}</td><td className="small muted">{r.detail ?? ''}</td></tr>)}</tbody>
+          </table></div>
+          {!job.running && <div className="row" style={{ marginTop: 10 }}><Btn onClick={() => { setJob(null); setCheck(null); setText(''); }}>Unlist more</Btn></div>}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 function AutoMapModal({ selected, filter, viewCount, onClose, onDone }: { selected: string[]; filter: any; viewCount: number; onClose: () => void; onDone: () => void }) {
   const [scope, setScope] = useState<'selected' | 'view'>(selected.length ? 'selected' : 'view');
   const [overwrite, setOverwrite] = useState(false);
@@ -404,6 +467,7 @@ export default function BulkEdit() {
   const [skuOpen, setSkuOpen] = useState<string | null>(null);
   const [images, setImages] = useState<{ rows: Row[]; cols: Col[]; bulk: boolean } | null>(null);
   const [autoOpen, setAutoOpen] = useState(false);
+  const [unlistOpen, setUnlistOpen] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [upload, setUpload] = useState<any>(null);
   const [bulkNonce, setBulkNonce] = useState(0);
@@ -461,6 +525,7 @@ export default function BulkEdit() {
     <div className="page page-wide">
       <PageHead title="Bulk mapping" sub="Every SKU in one grid. Fill Target fields one by one, select rows to set many at once, let Auto-map fill them from Shopify, or work in Excel and upload.">
         <Btn onClick={() => setAutoOpen(true)}>✨ Auto-map</Btn>
+        <Btn kind="danger" onClick={() => setUnlistOpen(true)} title="Paste TCINs or barcodes and unlist them on Target">Unlist by TCIN / barcode</Btn>
         <Btn busy={busy === 'stat'} title="Reads every item's listing status from Target (also runs by itself every 3 hours)" onClick={() => run('stat', () => post('/api/products/refresh-all'), (r: any) => `Target status updated for ${r.updated} items`).then(reload)}>↻ Target status</Btn>
         <div className="menu-wrap">
           <Btn disabled={!typed} title={typed ? '' : 'Pick an item type tab first'} onClick={() => setSheetOpen(!sheetOpen)}>Download sheet ▾</Btn>
@@ -641,6 +706,7 @@ export default function BulkEdit() {
 
       {skuOpen && <SkuModal variantId={skuOpen} onClose={() => setSkuOpen(null)} onImages={(r, c) => setImages({ rows: [r], cols: c.filter(isImg), bulk: false })} />}
       {images && <ImagesModal rows={images.rows} imageCols={images.cols.length ? images.cols : [{ key: PRIMARY } as Col]} bulk={images.bulk} onClose={() => setImages(null)} onSaved={() => { reload(); if (skuOpen) { const id = skuOpen; setSkuOpen(null); setTimeout(() => setSkuOpen(id), 0); } }} />}
+      {unlistOpen && <UnlistCodesModal onClose={() => setUnlistOpen(false)} onDone={reload} />}
       {autoOpen && <AutoMapModal selected={[...sel]} filter={filter} viewCount={grid.data?.total ?? 0} onClose={() => setAutoOpen(false)} onDone={reload} />}
       {upload && (
         <Modal title="Sheet uploaded" onClose={() => setUpload(null)}>

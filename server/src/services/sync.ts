@@ -7,6 +7,7 @@ import { db, schema } from '../db/index.js';
 import { getShopify, getSync } from '../lib/settings.js';
 import * as T from '../target/api.js';
 import { computePrice, priceIssues } from './builder.js';
+import { sendEnabled } from './listing.js';
 
 export type TaskKind = 'price' | 'inventory' | 'logistics';
 
@@ -120,6 +121,10 @@ async function runTask(task: typeof schema.syncTasks.$inferSelect) {
   if (!v.targetProductId) return { skipped: 'not on Target yet' };
   if (!v.syncEnabled) return { skipped: 'sync disabled for this variant' };
 
+  // Send OFF (or unlisted on Target): no price, no logistics; stock is sent as 0 so it cannot be sold
+  const sendOn = sendEnabled(v);
+  if (!sendOn && task.kind === 'price') return { skipped: v.listingStatus === 'UNLISTED' ? 'unlisted on Target: price not sent' : 'Send is OFF: price not sent' };
+  if (!sendOn && task.kind === 'logistics') return { skipped: 'Send is OFF' };
   if (task.kind === 'price') {
     const price = await computePrice(v);
     const problems = priceIssues(price);
@@ -148,6 +153,7 @@ async function runTask(task: typeof schema.syncTasks.$inferSelect) {
   }
   if (task.kind === 'inventory') {
     const want = await desiredQuantities(v);
+    if (!sendOn) for (const dc of Object.keys(want)) want[dc] = 0;
     const last = (v.lastQtySent ?? {}) as Record<string, number>;
     const sent: Record<string, number> = {};
     for (const [dc, q] of Object.entries(want)) {

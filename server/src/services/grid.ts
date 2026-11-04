@@ -181,7 +181,7 @@ export async function buildRows(prods: Product[], vs: Variant[]): Promise<GridRo
 function sizeStateSql(state?: string) {
   if (state === 'unlisted') return sql`v.listing_status = 'UNLISTED'`;
   if (state === 'rejected') return sql`v.listing_status IN ('REJECTED','SUSPENDED')`;
-  if (state === 'send_off') return sql`(v.overrides->>'_send' = 'false' OR (v.overrides->>'_send' IS NULL AND v.listing_status = 'UNLISTED'))`;
+  if (state === 'send_off') return sql`(v.overrides->>'_send' = 'false' OR v.listing_status = 'UNLISTED')`;
   if (state === 'not_selling') return sql`(v.listing_status IN ('UNLISTED','REJECTED','SUSPENDED') OR v.overrides->>'_send' = 'false')`;
   return null;
 }
@@ -190,7 +190,7 @@ function sizeStateMatch(state: string | undefined, v: Variant) {
   const send = (v.overrides as any)?._send;
   if (state === 'unlisted') return ls === 'UNLISTED';
   if (state === 'rejected') return ls === 'REJECTED' || ls === 'SUSPENDED';
-  if (state === 'send_off') return send === false || (send === undefined && ls === 'UNLISTED');
+  if (state === 'send_off') return send === false || ls === 'UNLISTED';
   if (state === 'not_selling') return ['UNLISTED', 'REJECTED', 'SUSPENDED'].includes(ls) || send === false;
   return true;
 }
@@ -807,6 +807,10 @@ export async function fillFromListedSize(variantIds: string[], opts: { overwrite
     const all = await db.select().from(schema.variants).where(eq(schema.variants.productId, pid));
     const { sizeOption, colorOption } = detectOptions(p);
     const opt = (v: Variant, o: string | null) => (o ? String((v.options as any)?.[o] ?? '') : '');
+    // Target attributes that hold the size or the color (e.g. "Product Size" 104725, "Color Family") are never copied across sizes / colors
+    const attrs = p.itemTypeId ? await db.select().from(schema.attributes).where(eq(schema.attributes.itemTypeId, p.itemTypeId)) : [];
+    const sizeAttr = new Set(attrs.filter((a) => /\bsize\b/i.test(a.name) && !/group|grouping|system|type/i.test(a.name)).map(attrKey));
+    const colorAttr = new Set(attrs.filter((a) => /colou?r/i.test(a.name)).map(attrKey));
     const good = all.filter((v) => !variantIds.includes(v.id) && sendEnabled(v) && v.targetProductId && !['REJECTED', 'SUSPENDED', 'UNLISTED'].includes(v.listingStatus ?? ''));
     for (const v of list) {
       const src = good.find((s) => opt(s, colorOption) === opt(v, colorOption)) ?? good[0];
@@ -816,8 +820,8 @@ export async function fillFromListedSize(variantIds: string[], opts: { overwrite
       const ov: Record<string, any> = { ...((v.overrides as any) ?? {}) };
       let copied = 0;
       for (const [k, val] of Object.entries(so)) {
-        if (k.startsWith('_') || SIZE_KEYS.has(k)) continue;
-        if (!sameColor && (k === 'child_variations.color' || isImageKey(k))) continue;
+        if (k.startsWith('_') || SIZE_KEYS.has(k) || sizeAttr.has(k)) continue;
+        if (!sameColor && (k === 'child_variations.color' || colorAttr.has(k) || isImageKey(k))) continue;
         if (!opts.overwrite && ov[k] !== undefined && ov[k] !== null && ov[k] !== '') continue;
         if (ov[k] === val) continue;
         ov[k] = val; copied++;

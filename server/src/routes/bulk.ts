@@ -8,6 +8,7 @@ import { unlistVariant } from '../services/items.js';
 import { enqueue } from '../services/sync.js';
 import { fillFromListedSize } from '../services/grid.js';
 import { contentEditor, saveContent } from '../services/contentEditor.js';
+import { matchCodes, startUnlistCodes, unlistJob } from '../services/unlistCodes.js';
 import { adoptAllTargetData, adoptProgress, autoItemTypesFromTarget, resetProductToTarget } from '../services/targetCatalog.js';
 
 const bad = (msg: string, code = 400) => Object.assign(new Error(msg), { statusCode: code });
@@ -148,6 +149,11 @@ export default async function (app: FastifyInstance) {
     const b = req.body as any;
     return fillFromListedSize(await idsFrom(b), { overwrite: !!b.overwrite });
   });
+
+  /** Unlist by TCIN / barcode: check what the codes match, then unlist them all in the background. */
+  app.post('/api/bulk/unlist-codes/check', async (req) => matchCodes(String((req.body as any)?.text ?? '')));
+  app.post('/api/bulk/unlist-codes', async (req) => startUnlistCodes(String((req.body as any)?.text ?? '')));
+  app.get('/api/bulk/unlist-codes', async () => unlistJob);
 
   /** Unlist on Target (approved items only). */
   app.post('/api/bulk/unlist', async (req) => {

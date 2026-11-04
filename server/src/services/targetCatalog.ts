@@ -5,6 +5,7 @@ import { db, schema } from '../db/index.js';
 import { getActiveEnv } from '../lib/settings.js';
 import * as T from '../target/api.js';
 import { importByCodes } from './catalog.js';
+import { effectiveListing } from './listing.js';
 
 const field = (fields: any[], name: string) => fields?.find((f) => f.name === name)?.value ?? null;
 /** UPC-A 012345678905 and EAN-13 0012345678905 are the same code. */
@@ -22,7 +23,7 @@ export async function storeTargetProduct(p: any, env?: string) {
     id: String(p.id), env: env ?? (await getActiveEnv()), tcin: p.tcin ?? null, externalId: p.external_id ?? null, relationshipType: p.relationship_type ?? null,
     parentId: p.parent_id ?? null, barcode: field(fields, 'barcode.value'),
     title: field(fields, 'descriptions.title') ?? field(fields, 'descriptions.parent_title'),
-    itemTypeName: field(fields, 'item_type.name'), listingStatus: st.listing_status ?? null, validationStatus: st.validation_status ?? null,
+    itemTypeName: field(fields, 'item_type.name'), listingStatus: effectiveListing(p) ?? st.listing_status ?? null, validationStatus: st.validation_status ?? null,
     fields, fetchedAt: new Date(),
   };
   await db.insert(schema.targetItems).values(row).onConflictDoUpdate({ target: schema.targetItems.id, set: { ...row, matchedVariantId: undefined, matchedProductId: undefined, matchBy: undefined } });
