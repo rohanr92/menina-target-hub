@@ -566,10 +566,14 @@ export default function BulkEdit() {
         <input style={{ width: 260 }} placeholder="Search title, SKU, barcode, TCIN" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} />
         <select style={{ width: 170 }} value={state} onChange={(e) => { setState(e.target.value); setPage(1); }}>
           <option value="">Any status</option><option value="not_on_target">Not on Target</option><option value="on_target">On Target</option>
+          <optgroup label="Target status (sizes)">
+            <option value="listed">Listed (approved, on sale)</option>
+            <option value="pending">Pending review</option>
+            <option value="unlisted">Unlisted</option>
+            <option value="rejected">Rejected</option>
+          </optgroup>
           <optgroup label="Sizes to fix later">
             <option value="not_selling">Not selling (unlisted, rejected, Send OFF)</option>
-            <option value="unlisted">Unlisted sizes</option>
-            <option value="rejected">Rejected sizes</option>
             <option value="send_off">Send OFF sizes</option>
           </optgroup>
         </select>

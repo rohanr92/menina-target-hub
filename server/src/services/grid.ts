@@ -179,6 +179,8 @@ export async function buildRows(prods: Product[], vs: Variant[]): Promise<GridRo
 
 /** Size-level status filters (only the matching sizes are shown). */
 function sizeStateSql(state?: string) {
+  if (state === 'listed') return sql`v.listing_status = 'APPROVED'`;
+  if (state === 'pending') return sql`v.listing_status = 'PENDING'`;
   if (state === 'unlisted') return sql`v.listing_status = 'UNLISTED'`;
   if (state === 'rejected') return sql`v.listing_status IN ('REJECTED','SUSPENDED')`;
   if (state === 'send_off') return sql`(v.overrides->>'_send' = 'false' OR v.listing_status = 'UNLISTED')`;
@@ -188,6 +190,8 @@ function sizeStateSql(state?: string) {
 function sizeStateMatch(state: string | undefined, v: Variant) {
   const ls = v.listingStatus ?? '';
   const send = (v.overrides as any)?._send;
+  if (state === 'listed') return ls === 'APPROVED';
+  if (state === 'pending') return ls === 'PENDING';
   if (state === 'unlisted') return ls === 'UNLISTED';
   if (state === 'rejected') return ls === 'REJECTED' || ls === 'SUSPENDED';
   if (state === 'send_off') return send === false || ls === 'UNLISTED';
