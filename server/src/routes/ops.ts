@@ -10,6 +10,7 @@ import * as R from '../services/reports.js';
 import { desiredQuantities, enqueue, enqueueMany, queueStats, targetVariantIds } from '../services/sync.js';
 import * as TP from '../services/testplan.js';
 import * as T from '../target/api.js';
+import { sendEnabled } from '../services/listing.js';
 import { targetRequest } from '../target/client.js';
 
 const bad = (msg: string, code = 400) => Object.assign(new Error(msg), { statusCode: code });
@@ -80,7 +81,11 @@ export default async function (app: FastifyInstance) {
       let want: Record<string, number> | null = null;
       if (dcs.length && !planError) { try { want = await desiredQuantities(v); } catch (e: any) { planError = e?.message ?? String(e); } }
       const t = lastTask.get(v.id);
+      // Send OFF / unlisted: Target gets stock 0 (see sync), show that
+      const sendOff = !sendEnabled(v) && !(v.overrides as any)?._relisting;
+      if (sendOff && want) want = Object.fromEntries(Object.keys(want).map((k) => [k, 0]));
       rows.push({
+        sendOff,
         variantId: v.id, productId: v.productId, sku: v.sku, tcin: v.tcin, syncEnabled: v.syncEnabled,
         shopify: v.inventory, byLoc: v.inventoryByLoc, want, sent: v.lastQtySent ?? {}, sentAt: v.lastQtySentAt,
         shopifyPrice: v.price, compareAtPrice: v.compareAtPrice, priceSent: v.lastPriceSent ?? null, priceSentAt: v.lastPriceSentAt,

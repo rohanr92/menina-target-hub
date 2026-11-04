@@ -76,7 +76,8 @@ function StockCard({ stock, sel, setSel, onlyProblems, setOnlyProblems, busy, ru
   const [bulkPrice, setBulkPrice] = useState(false);
   const [priceFor, setPriceFor] = useState<any>(null);
   const [stockFor, setStockFor] = useState<any>(null);
-  const [view, setView] = useState<string>('all');
+  const [view, setView] = useState<string>('all'); // Target status filter
+  const [stockView, setStockView] = useState<string>('all'); // stock filter (combines with the status filter)
   const [limit, setLimit] = useState(100);
   const d = stock.data;
   if (stock.loading && !d) return <Card title="Stock & price on Target"><Loading /></Card>;
@@ -88,17 +89,21 @@ function StockCard({ stock, sel, setSel, onlyProblems, setOnlyProblems, busy, ru
   const pkey = (p: any) => p ? [p.list_price, p.offer_price ?? null, p.map_price ?? null].map((x) => (x == null ? '' : Number(x).toFixed(2))).join('|') : '';
   const priceDiff = (r: any) => d.priceEnabled && r.priceWant && pkey(r.priceWant) !== pkey(r.priceSent);
   const problem = (r: any) => r.task?.status === 'failed' || !r.sentAt || stockDiff(r);
-  const counts: Record<string, number> = { all: rowsAll.length, APPROVED: 0, PENDING: 0, REJECTED: 0, UNLISTED: 0, instock: 0, units: 0, oos: 0, disabled: 0, problems: 0 };
+  const counts: Record<string, number> = { all: rowsAll.length, APPROVED: 0, PENDING: 0, REJECTED: 0, UNLISTED: 0, sendoff: 0, instock: 0, units: 0, oos: 0, disabled: 0, problems: 0 };
+  const inStatus = (r: any) => view === 'all' ? true : view === 'sendoff' ? r.sendOff : view === 'disabled' ? r.disabled : view === 'problems' ? problem(r) : r.listingStatus === view;
+  const inStock = (r: any) => stockView === 'all' ? true : stockView === 'oos' ? !total(r, 'want') : total(r, 'want') > 0;
   for (const r of rowsAll) {
     if (r.listingStatus && counts[r.listingStatus] !== undefined) counts[r.listingStatus]++;
-    if (!total(r, 'want')) counts.oos++; else { counts.instock++; counts.units += total(r, 'want'); }
+    if (r.sendOff) counts.sendoff++;
+    // stock counts follow the chosen status (e.g. Live + Out of stock)
+    if (inStatus(r)) { if (!total(r, 'want')) counts.oos++; else { counts.instock++; counts.units += total(r, 'want'); } }
     if (r.disabled) counts.disabled++;
     if (problem(r)) counts.problems++;
   }
   const words = q.toLowerCase().split(/\s+/).filter(Boolean);
   const hay = (r: any) => [r.sku, r.tcin, r.title, ...Object.values(r.options ?? {})].filter(Boolean).join(' ').toLowerCase();
   const optHit = (r: any, w: string) => Object.values(r.options ?? {}).some((x: any) => String(x).toLowerCase() === w);
-  const inView = (r: any) => view === 'all' ? true : view === 'oos' ? !total(r, 'want') : view === 'instock' ? total(r, 'want') > 0 : view === 'disabled' ? r.disabled : view === 'problems' ? problem(r) : r.listingStatus === view;
+  const inView = (r: any) => inStatus(r) && inStock(r);
   const rows = rowsAll.filter((r) => inView(r) && (!onlyProblems || problem(r)) && words.every((w) => optHit(r, w) || hay(r).includes(w)));
   const shown = rows.slice(0, limit);
   const ids = [...sel] as string[];
@@ -106,25 +111,34 @@ function StockCard({ stock, sel, setSel, onlyProblems, setOnlyProblems, busy, ru
   const toggle = (id: string) => { const n = new Set(sel); n.has(id) ? n.delete(id) : n.add(id); setSel(n); };
   const send = (only?: string[]) => run('send', () => post('/api/sync/stock/send', { variantIds: only }), (r: any) => `Sending stock for ${r.queued} SKU(s). Refresh in a few seconds.`).then(() => setTimeout(reload, 4000));
 
-  const Tile = ({ k, label, tone }: { k: string; label: string; tone?: string }) => (
-    <button onClick={() => { setView(k); setLimit(100); }} style={{ flex: '1 1 120px', textAlign: 'left', background: view === k ? '#eef2ff' : '#fff', border: `1px solid ${view === k ? '#6366f1' : '#e5e7eb'}`, borderRadius: 12, padding: '10px 12px', cursor: 'pointer' }}>
+  const Tile = ({ k, label, tone, stockTile }: { k: string; label: string; tone?: string; stockTile?: boolean }) => {
+    const on = stockTile ? stockView === k : view === k;
+    return (
+    <button onClick={() => { if (stockTile) setStockView(stockView === k ? 'all' : k); else setView(k); setLimit(100); }} title={stockTile ? 'Click again to show all stock' : undefined} style={{ flex: '1 1 120px', textAlign: 'left', background: on ? '#eef2ff' : '#fff', border: `1px solid ${on ? '#6366f1' : '#e5e7eb'}`, borderRadius: 12, padding: '10px 12px', cursor: 'pointer' }}>
       <div style={{ fontSize: 12, color: '#6b7280', fontWeight: 600 }}>{label}</div>
       <div style={{ fontSize: 22, fontWeight: 700, color: tone ?? 'inherit' }}>{counts[k]}</div>
     </button>
-  );
+    );
+  };
 
   return (
     <div className="stack">
+      <div className="small muted" style={{ fontWeight: 600 }}>Status on Target</div>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
         <Tile k="all" label="All SKUs on Target" />
-        <Tile k="APPROVED" label="Live" tone="#166534" />
+        <Tile k="APPROVED" label="Active (live)" tone="#166534" />
         <Tile k="PENDING" label="Pending review" tone="#92400e" />
         <Tile k="REJECTED" label="Rejected" tone="#991b1b" />
         <Tile k="UNLISTED" label="Unlisted" tone="#374151" />
-        <Tile k="instock" label={`In stock · ${counts.units} units`} tone="#166534" />
-        <Tile k="oos" label="Out of stock" />
+        <Tile k="sendoff" label="Send OFF" tone="#6b7280" />
         <Tile k="disabled" label="Disabled by you" />
         <Tile k="problems" label="Not sent / failed" tone={counts.problems ? '#b45309' : undefined} />
+      </div>
+      <div className="small muted" style={{ fontWeight: 600 }}>Stock on Target {view !== 'all' ? <span>· within the status above</span> : null}</div>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <Tile stockTile k="instock" label={`In stock · ${counts.units} units`} tone="#166534" />
+        <Tile stockTile k="oos" label="Out of stock" tone="#991b1b" />
+        <div className="small muted" style={{ alignSelf: 'center' }}>Pick a status and a stock tile together, e.g. <b>Active</b> + <b>Out of stock</b>. Click a stock tile again to clear it.</div>
       </div>
 
       <div className="card"><div className="card-b small" style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'center' }}>
