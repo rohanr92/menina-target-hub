@@ -21,6 +21,7 @@ import Returns from './pages/Returns';
 import ListingErrors from './pages/ListingErrors';
 import TestPlan from './pages/TestPlan';
 import Console from './pages/Console';
+import Marketplace from './pages/Marketplace';
 import Logs from './pages/Logs';
 
 function Login({ onDone }: { onDone: () => void }) {
@@ -113,6 +114,7 @@ const NAV: [string, [string, string][]][] = [
   ['Overview', [['/', 'Dashboard'], ['/test-plan', 'Test plan']]],
   ['Catalog', [['/products', 'Products'], ['/bulk', 'Bulk mapping'], ['/target-catalog', 'Target catalog'], ['/taxonomy', 'Taxonomy & mapping'], ['/inventory', 'Price & inventory'], ['/listing-errors', 'Listing errors']]],
   ['Orders', [['/orders', 'Orders'], ['/returns', 'Returns']]],
+  ['Marketplace', [['/marketplace', 'Marketplace portal']]],
   ['Tools', [['/alerts', 'Alerts'], ['/activity', 'Activity'], ['/reports', 'Reports'], ['/console', 'API console'], ['/logs', 'API log'], ['/settings', 'Settings'], ['/go-live', 'Go live']]],
 ];
 
@@ -174,6 +176,7 @@ export default function App() {
             <Route path="/orders" element={<Orders />} />
             <Route path="/orders/:id" element={<OrderDetail />} />
             <Route path="/returns" element={<Returns />} />
+            <Route path="/marketplace" element={<Marketplace />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/console" element={<Console />} />
             <Route path="/logs" element={<Logs />} />

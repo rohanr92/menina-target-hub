@@ -8,6 +8,7 @@ import golive from './golive.js';
 import images from './images.js';
 import bulk from './bulk.js';
 import admin from './admin.js';
+import promotions from './promotions.js';
 
 export async function registerRoutes(app: FastifyInstance) {
   await app.register(settings);
@@ -19,4 +20,5 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(images);
   await app.register(bulk);
   await app.register(admin);
+  await app.register(promotions);
 }

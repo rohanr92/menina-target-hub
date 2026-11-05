@@ -80,6 +80,9 @@ export function startScheduler() {
     // every item's listing status from Target, several times a day (Target has no push notifications)
     await tick('item-status-all', 180, true, refreshAllStatuses);
     await tick('reports', 2, true, refreshOpenReports);
+    // Marketplace portal › Promotions: promo prices on/off by date, deadline alerts, Target's promotions report daily
+    await tick('promotions', 5, true, async () => { const P = await import('../services/promotions.js'); const a = await P.applyPromotions(); await P.promotionAlerts(); return a; });
+    await tick('promotions-target', 24 * 60, true, async () => (await import('../services/promotions.js')).syncTargetPromotions());
     await tick('cleanup', 24 * 60, true, async () => {
       await pruneLogs(30);
       await db.delete(schema.syncTasks).where(and(sql`status IN ('done','failed')`, lt(schema.syncTasks.updatedAt, new Date(Date.now() - 7 * 864e5))));

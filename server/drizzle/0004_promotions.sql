@@ -1,0 +1,20 @@
+CREATE TABLE IF NOT EXISTS "promotions" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"source" text DEFAULT 'manual' NOT NULL,
+	"target_key" text UNIQUE,
+	"name" text NOT NULL,
+	"category" text,
+	"start_at" timestamp with time zone,
+	"end_at" timestamp with time zone,
+	"deadline_at" timestamp with time zone,
+	"status" text DEFAULT 'planned' NOT NULL,
+	"discount_type" text,
+	"discount_value" numeric,
+	"variant_ids" jsonb DEFAULT '[]'::jsonb NOT NULL,
+	"notes" text,
+	"applied_at" timestamp with time zone,
+	"restored_at" timestamp with time zone,
+	"raw" jsonb,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+);

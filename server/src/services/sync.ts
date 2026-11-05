@@ -135,7 +135,7 @@ async function runTask(task: typeof schema.syncTasks.$inferSelect) {
     const eff = (p: any) => (p ? Number(p.offer_price ?? p.list_price) : 0);
     const before = eff(v.lastPriceSent), after = eff(price);
     const key = JSON.stringify(price);
-    if (guard > 0 && before > 0 && after < before * (1 - guard / 100) && (v.overrides as any)?._price_ok !== key) {
+    if (guard > 0 && before > 0 && after < before * (1 - guard / 100) && (v.overrides as any)?._price_ok !== key && !(v.overrides as any)?._promo) { // a promotion you set up is not held
       const dropPct = Math.round((1 - after / before) * 1000) / 10;
       const ex = await db.execute(sql`SELECT id, status FROM price_holds WHERE variant_id = ${v.id} AND status IN ('held','rejected') AND proposed = ${key}::jsonb LIMIT 1`);
       if ((ex.rows[0] as any)?.status === 'rejected') return { skipped: 'price drop rejected by you; Target keeps the current price', price };

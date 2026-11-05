@@ -531,6 +531,17 @@ function validateContent(r: BuildResult, contentAttrs: Attribute[], kept: Set<st
 
 /** Target prices from Shopify price fields according to the price rules. */
 export async function computePrice(v: Variant) {
+  const base = await basePrice(v);
+  // a promotion you joined (Marketplace portal): sale price while it runs, list price unchanged
+  const pr = (v.overrides as any)?._promo as { type: 'percent' | 'fixed'; value: number; end: string } | undefined;
+  if (!base || !pr || !(new Date(pr.end) > new Date())) return base;
+  const now = base.offer_price ?? base.list_price;
+  const sale = pr.type === 'percent' ? Math.round(now * (1 - Number(pr.value) / 100) * 100) / 100 : Math.round(Number(pr.value) * 100) / 100;
+  if (!(sale > 0) || sale >= base.list_price) return base;
+  return { list_price: base.list_price, offer_price: sale, ...(base.map_price != null ? { map_price: Math.min(base.map_price, sale) } : {}) };
+}
+
+async function basePrice(v: Variant) {
   const { price: rule } = await getSync();
   const ov = v.overrides as any;
   const num = (x: any) => (x == null || x === '' ? null : Number(x));
