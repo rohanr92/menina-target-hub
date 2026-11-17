@@ -74,6 +74,23 @@ function TargetEnvForm({ env, s, oauthCallbackUrl, reload }: { env: 'stage' | 'p
   );
 }
 
+/** Shows the saved Target secrets (admins only) so they can be copied into another system. */
+function SecretsReveal() {
+  const [v, setV] = useState<any>(null);
+  const { busy, run } = useAction();
+  const row = (label: string, val: string | null) => <div key={label} className="row" style={{ gap: 6, alignItems: 'center' }}><span style={{ width: 150 }}>{label}</span>{val ? <><code style={{ wordBreak: 'break-all', flex: 1 }}>{val}</code><Copy text={val} /></> : <span className="muted">not saved</span>}</div>;
+  return (
+    <div style={{ margin: '10px 0', padding: 10, border: '1px solid var(--line)', borderRadius: 8 }}>
+      {!v ? <Btn size="sm" busy={busy === 'sec'} onClick={() => confirm('Show the saved Target secrets (API key, client secret, refresh token)? Anyone who sees them can act as your store on Target.') && run('sec', async () => { const r = await post('/api/target/oauth/secrets', { env: 'production' }); setV(r); return r; }, 'Shown — hide when done')}>Show Target secrets</Btn>
+        : <div className="stack small">
+            {row('TARGET_API_KEY', v.apiKey)}{row('TARGET_SELLER_ID', v.sellerId)}{row('TARGET_CLIENT_ID', v.clientId)}{row('TARGET_CLIENT_SECRET', v.clientSecret)}{row('TARGET_REFRESH_TOKEN', v.refreshToken)}
+            <div className="warn">If another system refreshes with this refresh token, Target may issue a new one and the hub may need “Connect with Target” again.</div>
+            <Btn size="sm" kind="ghost" onClick={() => setV(null)}>Hide</Btn>
+          </div>}
+    </div>
+  );
+}
+
 /** ERP access: one key for the ERP; the ERP asks the hub for fresh Target headers, so it needs no client secret or refresh token. */
 function ErpAccessCard() {
   const d = useLoad(() => get('/api/settings/erp'), []);
@@ -87,6 +104,7 @@ function ErpAccessCard() {
         <div>Address: <code>{e.url}</code> <Copy text={e.url} /></div>
         <div>Status: {e.hasKey ? <span className="ok">key active · created {dt(e.createdAt)}{e.lastUsedAt ? ` · last used ${dt(e.lastUsedAt)}` : ' · not used yet'}</span> : <span className="muted">no key yet</span>}</div>
       </div>}
+      <SecretsReveal />
       {key && <div style={{ margin: '10px 0', padding: 10, background: '#fef3c7', borderRadius: 8 }}>
         <div className="small"><b>Copy this key now — it is shown only once.</b> Put it in the ERP as HUB_TOKEN_KEY.</div>
         <div className="row" style={{ marginTop: 6 }}><code style={{ wordBreak: 'break-all' }}>{key}</code> <Copy text={key} /></div>

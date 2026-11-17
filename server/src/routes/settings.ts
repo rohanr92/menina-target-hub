@@ -188,6 +188,14 @@ export default async function (app: FastifyInstance) {
     return { key }; // shown once
   });
   app.post('/api/settings/erp/revoke', async (req) => { needAdminHere(req); await setSetting('erp', {}); return { ok: true }; });
+  /** Admins only: the saved Target secrets (API key, client ID/secret, refresh token), for another system you own. */
+  app.post('/api/target/oauth/secrets', async (req) => {
+    needAdminHere(req);
+    const e = ((req.body as any)?.env ?? (await getActiveEnv())) as TargetEnvName;
+    const c: any = await getTargetCreds(e);
+    return { env: e, apiKey: c.apiKey ?? null, sellerId: c.sellerId ?? null, clientId: c.oauth?.clientId ?? null, clientSecret: c.oauth?.clientSecret ?? null, refreshToken: c.oauth?.refreshToken ?? null };
+  });
+
   const erpTries = new Map<string, { n: number; at: number }>();
   /** Called by the ERP with header x-hub-key: returns the 3 headers for Target, the token refreshed when needed. */
   app.get('/api/erp/token', async (req, reply) => {
