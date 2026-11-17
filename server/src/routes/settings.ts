@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { env } from '../lib/env.js';
 import {
   getActiveEnv, getSetting, getShopify, getSync, getTargetCreds, HubSettings, mask, setSetting,
@@ -171,6 +171,41 @@ export default async function (app: FastifyInstance) {
     const o: any = creds.oauth;
     if (!o?.accessToken) throw Object.assign(new Error('Target is not connected with OAuth. Click “Connect with Target” first.'), { statusCode: 400 });
     return { env: e, accessToken: o.accessToken, expiresAt: o.expiresAt ?? null };
+  });
+
+  // ---- ERP access: the ERP asks the hub for a fresh Target token (no client secret / refresh token in the ERP) ----
+  const sha = (x: string) => createHash('sha256').update(x).digest();
+  const needAdminHere = (req: any) => { const a = req.actor; if (a && a.role !== 'admin') throw Object.assign(new Error('Only admins can do this'), { statusCode: 403 }); };
+  app.get('/api/settings/erp', async (req) => {
+    needAdminHere(req);
+    const e = await getSetting<any>('erp', {});
+    return { hasKey: !!e.keyHash, createdAt: e.createdAt ?? null, lastUsedAt: e.lastUsedAt ?? null, url: `${env.publicUrl || `https://${req.headers.host}`}/api/erp/token` };
+  });
+  app.post('/api/settings/erp/key', async (req) => {
+    needAdminHere(req);
+    const key = 'erp_' + randomBytes(24).toString('hex');
+    await setSetting('erp', { keyHash: sha(key).toString('hex'), createdAt: new Date().toISOString() });
+    return { key }; // shown once
+  });
+  app.post('/api/settings/erp/revoke', async (req) => { needAdminHere(req); await setSetting('erp', {}); return { ok: true }; });
+  const erpTries = new Map<string, { n: number; at: number }>();
+  /** Called by the ERP with header x-hub-key: returns the 3 headers for Target, the token refreshed when needed. */
+  app.get('/api/erp/token', async (req, reply) => {
+    const ip = String(req.ip);
+    const t = erpTries.get(ip);
+    if (t && Date.now() - t.at < 60_000 && t.n >= 10) return reply.code(429).send({ error: 'Too many tries, wait a minute' });
+    const given = String(req.headers['x-hub-key'] ?? '');
+    const e = await getSetting<any>('erp', {});
+    const ok = !!e.keyHash && !!given && timingSafeEqual(sha(given), Buffer.from(e.keyHash, 'hex'));
+    if (!ok) { erpTries.set(ip, { n: (t && Date.now() - t.at < 60_000 ? t.n : 0) + 1, at: t && Date.now() - t.at < 60_000 ? t.at : Date.now() }); return reply.code(401).send({ error: 'Wrong or missing x-hub-key' }); }
+    const envName = await getActiveEnv();
+    const { headers, creds } = await authHeaders(envName);
+    await setSetting('erp', { ...e, lastUsedAt: new Date().toISOString() });
+    return {
+      env: envName, base_url: envName === 'production' ? 'https://api.target.com' : 'https://stage-api.target.com',
+      seller_id: creds.sellerId, access_token: (creds.oauth as any)?.accessToken ?? null, expires_at: (creds.oauth as any)?.expiresAt ?? null,
+      headers, // x-api-key, x-seller-id, authorization: ready to send to Target
+    };
   });
 
   app.post('/api/target/oauth/disconnect', async (req) => {

@@ -69,7 +69,33 @@ function TargetEnvForm({ env, s, oauthCallbackUrl, reload }: { env: 'stage' | 'p
           </div>
         </div>
       </Card>
+      {env === 'production' && <ErpAccessCard />}
     </div>
+  );
+}
+
+/** ERP access: one key for the ERP; the ERP asks the hub for fresh Target headers, so it needs no client secret or refresh token. */
+function ErpAccessCard() {
+  const d = useLoad(() => get('/api/settings/erp'), []);
+  const { busy, run } = useAction();
+  const [key, setKey] = useState<string | null>(null);
+  const e: any = d.data;
+  return (
+    <Card title="ERP access (Target token for your ERP)">
+      <p className="small muted" style={{ marginTop: 0 }}>Your ERP calls the address below with header <b>x-hub-key</b> and gets ready-to-use Target headers (API key, seller ID, a fresh access token). The ERP needs no client secret or refresh token, and the hub's own Target login is never put at risk.</p>
+      {e && <div className="stack small">
+        <div>Address: <code>{e.url}</code> <Copy text={e.url} /></div>
+        <div>Status: {e.hasKey ? <span className="ok">key active · created {dt(e.createdAt)}{e.lastUsedAt ? ` · last used ${dt(e.lastUsedAt)}` : ' · not used yet'}</span> : <span className="muted">no key yet</span>}</div>
+      </div>}
+      {key && <div style={{ margin: '10px 0', padding: 10, background: '#fef3c7', borderRadius: 8 }}>
+        <div className="small"><b>Copy this key now — it is shown only once.</b> Put it in the ERP as HUB_TOKEN_KEY.</div>
+        <div className="row" style={{ marginTop: 6 }}><code style={{ wordBreak: 'break-all' }}>{key}</code> <Copy text={key} /></div>
+      </div>}
+      <div className="row" style={{ marginTop: 10 }}>
+        <Btn busy={busy === 'erpkey'} onClick={() => (!e?.hasKey || confirm('Create a new ERP key? The old key stops working right away.')) && run('erpkey', async () => { const r = await post('/api/settings/erp/key'); setKey(r.key); return r; }, 'New ERP key created').then(d.reload)}>{e?.hasKey ? 'Create new key' : 'Create ERP key'}</Btn>
+        {e?.hasKey && <Btn kind="ghost" busy={busy === 'erprev'} onClick={() => confirm('Revoke the ERP key? The ERP stops getting tokens.') && run('erprev', () => post('/api/settings/erp/revoke'), 'ERP key revoked').then(() => { setKey(null); d.reload(); })}>Revoke</Btn>}
+      </div>
+    </Card>
   );
 }
 

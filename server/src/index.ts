@@ -37,7 +37,7 @@ async function main() {
   await app.register(multipart, { limits: { fileSize: 25 * 1024 * 1024 } });
 
   // ---- auth (single team password from APP_PASSWORD) ----
-  const open = ['/api/auth/login', '/api/health', '/api/webhooks/'];
+  const open = ['/api/auth/login', '/api/health', '/api/webhooks/', '/api/erp/']; // /api/erp/ checks its own ERP key
   app.addHook('onRequest', async (req, reply) => {
     // Use the route Fastify actually matched (or the decoded path when nothing matched),
     // never the raw URL: /%61pi/... must not slip past the check.
