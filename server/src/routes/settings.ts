@@ -6,7 +6,7 @@ import {
   ShopifySettings, SyncSettings, TargetCredentials, TargetEnvName,
 } from '../lib/settings.js';
 import { DEFAULT_SHOPIFY_API_VERSION, normalizeShopDomain, SHOP_QUERY, shopifyGraphql } from '../shopify/client.js';
-import { OAUTH_DEFAULTS, targetRequest, hostFor, taxonomyWayInUse } from '../target/client.js';
+import { OAUTH_DEFAULTS, targetRequest, hostFor, taxonomyWayInUse, authHeaders } from '../target/client.js';
 
 const ENVS: TargetEnvName[] = ['stage', 'production'];
 const SECRET_KEEP = '__keep__'; // UI sends this to leave a secret unchanged
@@ -160,6 +160,17 @@ export default async function (app: FastifyInstance) {
       oauth: { ...o, accessToken: j.access_token, refreshToken: j.refresh_token, expiresAt: Date.now() + (Number(j.expires_in) || 3600) * 1000, pendingState: undefined, pendingNonce: undefined, pendingRedirect: undefined } as any,
     });
     return reply.redirect('/settings?oauth=connected');
+  });
+
+  /** Admins only: the current Target access token (refreshed first when it is about to expire), to paste into another tool. */
+  app.post('/api/target/oauth/token', async (req) => {
+    const actor = (req as any).actor;
+    if (actor && actor.role !== 'admin') throw Object.assign(new Error('Only admins can copy the access token'), { statusCode: 403 });
+    const e = ((req.body as any)?.env ?? (await getActiveEnv())) as TargetEnvName;
+    const { creds } = await authHeaders(e);
+    const o: any = creds.oauth;
+    if (!o?.accessToken) throw Object.assign(new Error('Target is not connected with OAuth. Click “Connect with Target” first.'), { statusCode: 400 });
+    return { env: e, accessToken: o.accessToken, expiresAt: o.expiresAt ?? null };
   });
 
   app.post('/api/target/oauth/disconnect', async (req) => {

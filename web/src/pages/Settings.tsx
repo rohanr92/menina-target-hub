@@ -60,6 +60,11 @@ function TargetEnvForm({ env, s, oauthCallbackUrl, reload }: { env: 'stage' | 'p
           <div className="row">
             <Btn busy={busy === 'save'} onClick={save}>Save</Btn>
             <a className="btn primary" href={`/api/target/oauth/start?env=${env}`}>Connect with Target</a>
+            {t.oauth.connected && <Btn busy={busy === 'tok'} title="Copies the current access token (Authorization: Bearer …) for another tool. It lasts up to 8 hours." onClick={() => run('tok', async () => {
+              const r = await post('/api/target/oauth/token', { env });
+              try { await navigator.clipboard.writeText(r.accessToken); } catch { window.prompt('Copy the access token:', r.accessToken); }
+              return r;
+            }, (r: any) => `Access token copied · valid until ${dt(r.expiresAt)}`)}>Copy access token</Btn>}
             {t.oauth.connected && <Btn kind="ghost" onClick={() => run('dc', () => post('/api/target/oauth/disconnect', { env }), 'Disconnected').then(reload)}>Disconnect</Btn>}
           </div>
         </div>
